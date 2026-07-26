@@ -200,8 +200,16 @@ pub async fn changes_page(
     .fetch_all(&state.db)
     .await?;
 
+    // A change already in the chain isn't offered again — adopting
+    // "intervocalic voicing" five times is noise, not phonology. (True
+    // re-application after an intervening change is a later refinement.)
+    let adopted: Vec<&str> = own_chain
+        .iter()
+        .filter_map(|(_, _, cref, _)| cref.as_deref())
+        .collect();
     let mut offered: Vec<&sca::CatalogEntry> = catalog::catalog()
         .iter()
+        .filter(|e| !adopted.contains(&e.id.as_str()))
         .filter(|e| e.applicable_when.holds(&inventory))
         .collect();
     offered.sort_by(|a, b| b.naturalness.partial_cmp(&a.naturalness).unwrap());
@@ -279,6 +287,17 @@ pub async fn changes_page(
                     p.muted style="margin:.45rem 0 0" { (e.description) }
                 }
             }
+        }
+
+        h2 { "Generate" }
+        p.muted style="font-size:.9rem" {
+            "When the chain feels right, generate " (language.name) " — "
+            "you'll land on its home page with the full derived lexicon "
+            "one click away. You can always come back and add or remove "
+            "changes; the lexicon re-derives every time."
+        }
+        form.inline method="get" action={ "/languages/" (language.id) } {
+            button type="submit" { "Generate " (language.name) " →" }
         }
     };
     Ok(views::layout("Sound changes", Some(&user), body).into_response())
