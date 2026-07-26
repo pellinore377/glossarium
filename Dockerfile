@@ -1,5 +1,5 @@
 # ---- planner: compute the dependency recipe ----
-FROM rust:1.84-slim AS chef
+FROM rust:1.85-slim AS chef
 RUN cargo install cargo-chef --locked
 WORKDIR /app
 
