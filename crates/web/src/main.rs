@@ -92,7 +92,23 @@ async fn main() -> Result<()> {
         )
         .route(
             "/languages/{id}/phonology/vowels",
-            get(phonology::vowels_stub),
+            get(phonology::vowels_page),
+        )
+        .route(
+            "/languages/{id}/phonology/vowels/toggle",
+            post(phonology::toggle_vowel),
+        )
+        .route(
+            "/languages/{id}/phonology/diphthongs",
+            get(phonology::diphthongs_page),
+        )
+        .route(
+            "/languages/{id}/phonology/diphthongs/toggle",
+            post(phonology::toggle_diphthong),
+        )
+        .route(
+            "/languages/{id}/phonology/phonotactics",
+            get(phonology::phonotactics_stub),
         )
         .layer(session_layer)
         .layer(TraceLayer::new_for_http())

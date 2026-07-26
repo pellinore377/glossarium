@@ -121,12 +121,136 @@ pub fn consonant_warnings(selected: &[String]) -> Vec<String> {
     warnings
 }
 
+const LOW_VOWELS: &[&str] = &["a", "ɶ", "ɑ", "ɒ", "æ", "ɐ"];
+const HIGH_VOWELS: &[&str] = &["i", "y", "ɨ", "ʉ", "ɯ", "u", "ɪ", "ʏ", "ʊ"];
+const FRONT_ROUNDED: &[&str] = &["y", "ʏ", "ø", "œ", "ɶ"];
+const FRONT_UNROUNDED: &[&str] = &["i", "ɪ", "e", "ɛ", "æ", "a"];
+const BACK_UNROUNDED_NONLOW: &[&str] = &["ɯ", "ɤ", "ʌ"];
+const BACK_ROUNDED: &[&str] = &["u", "ʊ", "o", "ɔ"];
+
+pub fn vowel_warnings(selected: &[String]) -> Vec<String> {
+    let sel: HashSet<&str> = selected.iter().map(|s| s.as_str()).collect();
+    let mut warnings = Vec::new();
+    if sel.is_empty() {
+        return warnings;
+    }
+    let has_any = |set: &[&str]| set.iter().any(|s| sel.contains(s));
+
+    if !has_any(LOW_VOWELS) {
+        warnings.push(
+            "No open (low) vowel. Virtually every language has an /a/-like \
+             vowel anchoring the bottom of the space."
+                .to_string(),
+        );
+    }
+    if !has_any(HIGH_VOWELS) && sel.len() >= 2 {
+        warnings.push(
+            "No close (high) vowels. Vowel systems almost always stretch to \
+             the top corners — /i/ and /u/ are the two most common vowels \
+             on Earth."
+                .to_string(),
+        );
+    }
+    if has_any(FRONT_ROUNDED) && !has_any(FRONT_UNROUNDED) {
+        warnings.push(
+            "Front rounded vowels without front unrounded ones. /y ø œ/ \
+             virtually always imply /i e ɛ/ — rounding is the marked option \
+             up front."
+                .to_string(),
+        );
+    }
+    if has_any(BACK_UNROUNDED_NONLOW) && !has_any(BACK_ROUNDED) {
+        warnings.push(
+            "Back unrounded vowels without back rounded ones. /ɯ ɤ ʌ/ \
+             normally coexist with (or derive from) /u o ɔ/."
+                .to_string(),
+        );
+    }
+    if sel.len() < 3 {
+        warnings.push(format!(
+            "Only {} vowel(s). The smallest defensible systems have 3 \
+             (/i a u/); anything less is contested even for natural \
+             languages.",
+            sel.len()
+        ));
+    } else if sel.len() > 14 {
+        warnings.push(format!(
+            "{} vowel qualities is Germanic-and-beyond territory — \
+             expect the romanization step to lean hard on digraphs.",
+            sel.len()
+        ));
+    }
+    warnings
+}
+
+/// Diphthongs are stored as two-character strings, nucleus + offglide.
+pub fn diphthong_warnings(diphthongs: &[String], vowels: &[String]) -> Vec<String> {
+    let vset: HashSet<&str> = vowels.iter().map(|s| s.as_str()).collect();
+    let mut warnings = Vec::new();
+    if diphthongs.is_empty() {
+        return warnings;
+    }
+
+    let mut orphans: Vec<String> = Vec::new();
+    for d in diphthongs {
+        let bad = d
+            .chars()
+            .any(|c| !vset.contains(c.to_string().as_str()));
+        if bad {
+            orphans.push(format!("/{d}/"));
+        }
+    }
+    if !orphans.is_empty() {
+        warnings.push(format!(
+            "{} use(s) a vowel no longer in the inventory. They'll still \
+             work, but consider re-adding the vowel or dropping the \
+             diphthong.",
+            orphans.join(", ")
+        ));
+    }
+
+    let closing = |d: &str| {
+        d.chars()
+            .last()
+            .map(|c| matches!(c, 'i' | 'u' | 'ɪ' | 'ʊ' | 'y' | 'ɯ'))
+            .unwrap_or(false)
+    };
+    let non_closing = diphthongs.iter().filter(|d| !closing(d)).count();
+    if non_closing * 2 > diphthongs.len() {
+        warnings.push(
+            "Most of these don't close toward a high vowel. Closing \
+             diphthongs (/ai au ei ou/-types) dominate cross-linguistically; \
+             opening ones like /ia ua/ are real but rarer."
+                .to_string(),
+        );
+    }
+
+    warnings
+}
+
 #[cfg(test)]
-mod tests {
+mod vowel_tests {
     use super::*;
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn triangle_is_clean() {
+        assert!(vowel_warnings(&s(&["i", "u", "a"])).is_empty());
+    }
+
+    #[test]
+    fn missing_low_flagged() {
+        let w = vowel_warnings(&s(&["i", "u", "e", "o"]));
+        assert!(w.iter().any(|w| w.contains("open (low)")));
+    }
+
+    #[test]
+    fn orphan_diphthong_flagged() {
+        let w = diphthong_warnings(&s(&["ai", "au"]), &s(&["a", "i"]));
+        assert!(w.iter().any(|w| w.contains("no longer in the inventory")));
     }
 
     #[test]

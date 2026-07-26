@@ -231,3 +231,105 @@ pub const AESTHETICS: &[Aesthetic] = &[
 pub fn aesthetic_by_id(id: &str) -> Option<&'static Aesthetic> {
     AESTHETICS.iter().find(|a| a.id == id)
 }
+
+// ---------- Vowels ----------
+
+/// A point on the vowel quadrilateral. Coordinates are percentages of the
+/// chart area; where two symbols share a point, left = unrounded,
+/// right = rounded, per IPA convention.
+pub struct VowelPoint {
+    pub x: f32,
+    pub y: f32,
+    pub unrounded: Option<&'static str>,
+    pub rounded: Option<&'static str>,
+}
+
+pub const VOWEL_POINTS: &[VowelPoint] = &[
+    // Close
+    VowelPoint { x: 8.0, y: 7.0, unrounded: Some("i"), rounded: Some("y") },
+    VowelPoint { x: 50.0, y: 7.0, unrounded: Some("ɨ"), rounded: Some("ʉ") },
+    VowelPoint { x: 92.0, y: 7.0, unrounded: Some("ɯ"), rounded: Some("u") },
+    // Near-close
+    VowelPoint { x: 26.0, y: 20.5, unrounded: Some("ɪ"), rounded: Some("ʏ") },
+    VowelPoint { x: 80.0, y: 20.5, unrounded: None, rounded: Some("ʊ") },
+    // Close-mid
+    VowelPoint { x: 19.0, y: 34.0, unrounded: Some("e"), rounded: Some("ø") },
+    VowelPoint { x: 55.5, y: 34.0, unrounded: Some("ɘ"), rounded: Some("ɵ") },
+    VowelPoint { x: 92.0, y: 34.0, unrounded: Some("ɤ"), rounded: Some("o") },
+    // Mid
+    VowelPoint { x: 58.0, y: 47.5, unrounded: Some("ə"), rounded: None },
+    // Open-mid
+    VowelPoint { x: 29.0, y: 61.0, unrounded: Some("ɛ"), rounded: Some("œ") },
+    VowelPoint { x: 60.5, y: 61.0, unrounded: Some("ɜ"), rounded: Some("ɞ") },
+    VowelPoint { x: 92.0, y: 61.0, unrounded: Some("ʌ"), rounded: Some("ɔ") },
+    // Near-open
+    VowelPoint { x: 36.0, y: 74.5, unrounded: Some("æ"), rounded: None },
+    VowelPoint { x: 63.0, y: 74.5, unrounded: Some("ɐ"), rounded: None },
+    // Open
+    VowelPoint { x: 38.0, y: 88.0, unrounded: Some("a"), rounded: Some("ɶ") },
+    VowelPoint { x: 92.0, y: 88.0, unrounded: Some("ɑ"), rounded: Some("ɒ") },
+];
+
+pub fn all_vowel_symbols() -> Vec<&'static str> {
+    let mut out = Vec::new();
+    for p in VOWEL_POINTS {
+        if let Some(s) = p.unrounded {
+            out.push(s);
+        }
+        if let Some(s) = p.rounded {
+            out.push(s);
+        }
+    }
+    out
+}
+
+/// Chart-order index for stable sorting of selected vowels in the
+/// diphthong grid; unknown symbols sort last.
+pub fn vowel_order(sym: &str) -> usize {
+    all_vowel_symbols()
+        .iter()
+        .position(|s| *s == sym)
+        .unwrap_or(usize::MAX)
+}
+
+// ---------- Vowels ----------
+
+/// One vowel-chart position: height (0=close..3=open) × backness
+/// (0=front..2=back), with the unrounded symbol always present and the
+/// rounded partner optional — mirrors the standard IPA vowel quadrilateral,
+/// where front/back edges are the same three heights but central only has
+/// close/mid/open-mid populated in the traditional chart.
+pub struct VowelSlot {
+    pub height: u8,
+    pub backness: u8,
+    pub unrounded: &'static str,
+    pub rounded: Option<&'static str>,
+}
+
+/// height: 0 close, 1 close-mid, 2 open-mid, 3 open
+/// backness: 0 front, 1 central, 2 back
+pub const VOWEL_SLOTS: &[VowelSlot] = &[
+    VowelSlot { height: 0, backness: 0, unrounded: "i", rounded: Some("y") },
+    VowelSlot { height: 0, backness: 1, unrounded: "ɨ", rounded: Some("ʉ") },
+    VowelSlot { height: 0, backness: 2, unrounded: "ɯ", rounded: Some("u") },
+    VowelSlot { height: 1, backness: 0, unrounded: "e", rounded: Some("ø") },
+    VowelSlot { height: 1, backness: 1, unrounded: "ɘ", rounded: Some("ɵ") },
+    VowelSlot { height: 1, backness: 2, unrounded: "ɤ", rounded: Some("o") },
+    VowelSlot { height: 2, backness: 0, unrounded: "ɛ", rounded: Some("œ") },
+    VowelSlot { height: 2, backness: 1, unrounded: "ɜ", rounded: Some("ɞ") },
+    VowelSlot { height: 2, backness: 2, unrounded: "ʌ", rounded: Some("ɔ") },
+    VowelSlot { height: 3, backness: 0, unrounded: "a", rounded: Some("ɶ") },
+    VowelSlot { height: 3, backness: 1, unrounded: "ä", rounded: None },
+    VowelSlot { height: 3, backness: 2, unrounded: "ɑ", rounded: Some("ɒ") },
+];
+
+pub fn all_vowel_symbols() -> Vec<&'static str> {
+    let mut out = Vec::new();
+    for slot in VOWEL_SLOTS {
+        out.push(slot.unrounded);
+        if let Some(r) = slot.rounded {
+            out.push(r);
+        }
+    }
+    out
+}

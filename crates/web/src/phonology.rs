@@ -313,10 +313,259 @@ pub async fn toggle_consonant(
     Ok(warnings_fragment(&phonology.consonants).into_response())
 }
 
-// ---------- Vowels (stub until next pass) ----------
+// ---------- Vowels ----------
+
+fn vowel_warnings_fragment(selected: &[String]) -> Markup {
+    let warnings = typology::vowel_warnings(selected);
+    html! {
+        div #warnings .warnbox {
+            p.eyebrow { (selected.len()) " vowel" @if selected.len() != 1 { "s" } " selected" }
+            @if warnings.is_empty() {
+                @if !selected.is_empty() {
+                    p.ok { "Nothing typologically alarming so far." }
+                }
+            } @else {
+                @for w in &warnings {
+                    p.warn { (w) }
+                }
+            }
+        }
+    }
+}
+
+fn vowel_button(language_id: i64, sym: &str, on: bool) -> Markup {
+    let vals = format!(r#"{{"symbol":"{sym}"}}"#);
+    html! {
+        button.sym.on[on]
+            type="button"
+            onclick="this.classList.toggle('on')"
+            hx-post={ "/languages/" (language_id) "/phonology/vowels/toggle" }
+            hx-vals=(vals)
+            hx-target="#warnings"
+            hx-swap="outerHTML"
+        { (sym) }
+    }
+}
 
 /// GET /languages/{id}/phonology/vowels
-pub async fn vowels_stub(
+pub async fn vowels_page(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+) -> Result<Response, AppError> {
+    let user = match require_user(&state, &session).await? {
+        Ok(u) => u,
+        Err(landing) => return Ok(landing),
+    };
+    let (language, phonology) = owned_language_with_phonology(&state, &user, id).await?;
+    let is_on = |s: &str| phonology.vowels.iter().any(|x| x == s);
+
+    let body = html! {
+        p.eyebrow {
+            a href={ "/languages/" (language.id) "/phonology/consonants" } class="muted" { "← Consonants" }
+        }
+        (wizard_steps("vowels"))
+        h1 { "Vowels" }
+        p {
+            "Front vowels sit on the left, back on the right; the space "
+            "narrows toward the bottom because the jaw does. Where symbols "
+            "share a point, the left is unrounded, the right rounded."
+        }
+        div.vowel-wrap {
+            svg.trap viewBox="0 0 100 100" preserveAspectRatio="none" {
+                polygon points="8,7 92,7 92,88 38,88" fill="none"
+                    stroke="var(--line)" stroke-width="1"
+                    vector-effect="non-scaling-stroke" {}
+                line x1="19" y1="34" x2="92" y2="34" stroke="var(--line)"
+                    stroke-width="1" vector-effect="non-scaling-stroke" {}
+                line x1="29" y1="61" x2="92" y2="61" stroke="var(--line)"
+                    stroke-width="1" vector-effect="non-scaling-stroke" {}
+                line x1="50" y1="7" x2="63" y2="88" stroke="var(--line)"
+                    stroke-width="1" vector-effect="non-scaling-stroke" {}
+            }
+            @for p in ipa_chart::VOWEL_POINTS {
+                div.vpoint style={ "left:" (p.x) "%;top:" (p.y) "%" } {
+                    @if let Some(s) = p.unrounded { (vowel_button(language.id, s, is_on(s))) }
+                    @if let Some(s) = p.rounded { (vowel_button(language.id, s, is_on(s))) }
+                }
+            }
+        }
+        (vowel_warnings_fragment(&phonology.vowels))
+        form.inline method="get" action={ "/languages/" (language.id) "/phonology/diphthongs" } {
+            button type="submit" { "Continue to diphthongs →" }
+        }
+    };
+    Ok(views::layout("Vowels", Some(&user), body).into_response())
+}
+
+/// POST /languages/{id}/phonology/vowels/toggle (HTMX)
+pub async fn toggle_vowel(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+    Form(form): Form<ToggleSymbol>,
+) -> Result<Response, AppError> {
+    let user = match require_user(&state, &session).await? {
+        Ok(u) => u,
+        Err(landing) => return Ok(landing),
+    };
+    let (language, mut phonology) = owned_language_with_phonology(&state, &user, id).await?;
+
+    if ipa_chart::all_vowel_symbols().contains(&form.symbol.as_str()) {
+        match phonology.vowels.iter().position(|s| *s == form.symbol) {
+            Some(i) => {
+                phonology.vowels.remove(i);
+            }
+            None => phonology.vowels.push(form.symbol.clone()),
+        }
+        phonology.aesthetic = Some("custom".to_string());
+        save_phonology(&state, language.id, &phonology).await?;
+    }
+
+    Ok(vowel_warnings_fragment(&phonology.vowels).into_response())
+}
+
+// ---------- Diphthongs ----------
+
+fn diphthong_warnings_fragment(diphthongs: &[String], vowels: &[String]) -> Markup {
+    let warnings = typology::diphthong_warnings(diphthongs, vowels);
+    html! {
+        div #warnings .warnbox {
+            p.eyebrow {
+                (diphthongs.len()) " diphthong" @if diphthongs.len() != 1 { "s" } " selected"
+            }
+            @if warnings.is_empty() {
+                @if !diphthongs.is_empty() {
+                    p.ok { "Nothing typologically alarming so far." }
+                }
+            } @else {
+                @for w in &warnings {
+                    p.warn { (w) }
+                }
+            }
+        }
+    }
+}
+
+/// GET /languages/{id}/phonology/diphthongs
+///
+/// Diphthongs aren't chart primitives — the grid is generated from the
+/// vowels this language actually selected: rows are the nucleus, columns
+/// the offglide.
+pub async fn diphthongs_page(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+) -> Result<Response, AppError> {
+    let user = match require_user(&state, &session).await? {
+        Ok(u) => u,
+        Err(landing) => return Ok(landing),
+    };
+    let (language, phonology) = owned_language_with_phonology(&state, &user, id).await?;
+
+    let mut vowels = phonology.vowels.clone();
+    vowels.sort_by_key(|v| ipa_chart::vowel_order(v));
+    let is_on = |d: &str| phonology.diphthongs.iter().any(|x| x == d);
+
+    let body = html! {
+        p.eyebrow {
+            a href={ "/languages/" (language.id) "/phonology/vowels" } class="muted" { "← Vowels" }
+        }
+        (wizard_steps("diphthongs"))
+        h1 { "Diphthongs" }
+        @if vowels.len() < 2 {
+            div.empty {
+                "Diphthongs are built from your vowel inventory, and "
+                (language.name) " has " (vowels.len()) " vowel(s) so far — "
+                "select at least two on the previous page and come back."
+            }
+        } @else {
+            p {
+                "Rows are the starting vowel (nucleus), columns the vowel "
+                "it glides toward. /ai/-style closing diphthongs are the "
+                "cross-linguistic bread and butter; anything else is spice."
+            }
+            div.chart-scroll {
+                table.ipa {
+                    thead {
+                        tr {
+                            th { span.muted { "nucleus ↓ glide →" } }
+                            @for g in &vowels { th { (g) } }
+                        }
+                    }
+                    tbody {
+                        @for n in &vowels {
+                            tr {
+                                th.manner { (n) }
+                                @for g in &vowels {
+                                    @if n == g {
+                                        td.x {}
+                                    } @else {
+                                        @let d = format!("{n}{g}");
+                                        td {
+                                            button.sym.on[is_on(&d)]
+                                                type="button"
+                                                onclick="this.classList.toggle('on')"
+                                                hx-post={ "/languages/" (language.id) "/phonology/diphthongs/toggle" }
+                                                hx-vals=(format!(r#"{{"symbol":"{d}"}}"#))
+                                                hx-target="#warnings"
+                                                hx-swap="outerHTML"
+                                            { (d) }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            (diphthong_warnings_fragment(&phonology.diphthongs, &phonology.vowels))
+        }
+        form.inline method="get" action={ "/languages/" (language.id) "/phonology/phonotactics" } {
+            button type="submit" { "Continue to phonotactics →" }
+        }
+    };
+    Ok(views::layout("Diphthongs", Some(&user), body).into_response())
+}
+
+/// POST /languages/{id}/phonology/diphthongs/toggle (HTMX)
+pub async fn toggle_diphthong(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+    Form(form): Form<ToggleSymbol>,
+) -> Result<Response, AppError> {
+    let user = match require_user(&state, &session).await? {
+        Ok(u) => u,
+        Err(landing) => return Ok(landing),
+    };
+    let (language, mut phonology) = owned_language_with_phonology(&state, &user, id).await?;
+
+    let chars: Vec<String> = form.symbol.chars().map(|c| c.to_string()).collect();
+    let valid = chars.len() == 2
+        && chars[0] != chars[1]
+        && chars
+            .iter()
+            .all(|c| ipa_chart::all_vowel_symbols().contains(&c.as_str()));
+
+    if valid {
+        match phonology.diphthongs.iter().position(|s| *s == form.symbol) {
+            Some(i) => {
+                phonology.diphthongs.remove(i);
+            }
+            None => phonology.diphthongs.push(form.symbol.clone()),
+        }
+        phonology.aesthetic = Some("custom".to_string());
+        save_phonology(&state, language.id, &phonology).await?;
+    }
+
+    Ok(diphthong_warnings_fragment(&phonology.diphthongs, &phonology.vowels).into_response())
+}
+
+// ---------- Phonotactics (stub until next pass) ----------
+
+/// GET /languages/{id}/phonology/phonotactics
+pub async fn phonotactics_stub(
     State(state): State<AppState>,
     session: Session,
     Path(id): Path<i64>,
@@ -328,14 +577,17 @@ pub async fn vowels_stub(
     let (language, phonology) = owned_language_with_phonology(&state, &user, id).await?;
     let body = html! {
         p.eyebrow {
-            a href={ "/languages/" (language.id) "/phonology/consonants" } class="muted" { "← Consonants" }
+            a href={ "/languages/" (language.id) "/phonology/diphthongs" } class="muted" { "← Diphthongs" }
         }
-        (wizard_steps("vowels"))
-        h1 { "Vowels" }
+        (wizard_steps("phonotactics"))
+        h1 { "Phonotactics" }
         div.empty {
-            "The vowel trapezoid lands in the next pass. Your consonant "
-            "selections (" (phonology.consonants.len()) " so far) are saved."
+            "Syllable structure presets and the onset/nucleus/coda builder "
+            "land in the next pass. Inventory so far: "
+            (phonology.consonants.len()) " consonants, "
+            (phonology.vowels.len()) " vowels, "
+            (phonology.diphthongs.len()) " diphthongs — all saved."
         }
     };
-    Ok(views::layout("Vowels", Some(&user), body).into_response())
+    Ok(views::layout("Phonotactics", Some(&user), body).into_response())
 }

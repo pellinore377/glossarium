@@ -117,6 +117,19 @@ ul.presets .ph {
   color: var(--faded); margin: 0 0 .5rem;
 }
 .wizsteps strong { color: var(--accent-ink); font-weight: 500; }
+.vowel-wrap {
+  position: relative; max-width: 40rem; aspect-ratio: 10 / 7.2;
+  margin: 1.5rem auto; padding: 0;
+}
+.vowel-wrap svg.trap {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  pointer-events: none;
+}
+.vpoint {
+  position: absolute; transform: translate(-50%, -50%);
+  display: flex; gap: .1rem; background: var(--paper);
+  padding: 0 .15rem; border-radius: 4px;
+}
 "#;
 
 pub fn layout(title: &str, user: Option<&User>, body: Markup) -> Markup {
