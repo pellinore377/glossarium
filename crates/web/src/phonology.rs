@@ -20,6 +20,7 @@ use crate::{
     error::AppError,
     ipa_chart::{self, Cell, AESTHETICS, CONSONANT_ROWS, PLACES},
     phonotactics::{self, SyllableStructure, STRESS_PATTERNS, SYLLABLE_PRESETS},
+    romanization,
     routes::Language,
     state::AppState,
     typology, views,
@@ -41,6 +42,8 @@ pub struct Phonology {
     pub syllable: Option<SyllableStructure>,
     #[serde(default)]
     pub stress: Option<String>,
+    #[serde(default)]
+    pub romanization: std::collections::BTreeMap<String, String>,
 }
 
 async fn owned_language_with_phonology(
@@ -96,6 +99,7 @@ fn wizard_steps(current: &str) -> Markup {
         "phonotactics",
         "stress",
         "romanization",
+        "summary",
     ];
     html! {
         p.wizsteps {
@@ -792,10 +796,168 @@ pub async fn choose_stress(
     .into_response())
 }
 
-// ---------- Romanization (stub until next pass) ----------
+// ---------- Romanization ----------
+
+/// The full inventory in presentation order: consonants (chart order),
+/// vowels (chart order), then diphthongs (nucleus-major chart order).
+fn ordered_inventory(phonology: &Phonology) -> Vec<String> {
+    let mut consonants = phonology.consonants.clone();
+    consonants.sort_by_key(|s| ipa_chart::consonant_order(s));
+    let mut vowels = phonology.vowels.clone();
+    vowels.sort_by_key(|s| ipa_chart::vowel_order(s));
+    let mut diphthongs = phonology.diphthongs.clone();
+    diphthongs.sort_by_key(|d| {
+        let mut ch = d.chars();
+        let n = ch.next().map(|c| ipa_chart::vowel_order(&c.to_string()));
+        let g = ch.next().map(|c| ipa_chart::vowel_order(&c.to_string()));
+        (n, g)
+    });
+    consonants
+        .into_iter()
+        .chain(vowels)
+        .chain(diphthongs)
+        .collect()
+}
+
+fn rom_warnings_fragment(phonology: &Phonology) -> Markup {
+    let ordered = ordered_inventory(phonology);
+    let warnings = romanization::warnings(&phonology.romanization, &ordered);
+    html! {
+        div #warnings .warnbox {
+            @if warnings.is_empty() {
+                p.ok { "No collisions — every phoneme reads back unambiguously." }
+            } @else {
+                @for w in &warnings {
+                    p.warn { (w) }
+                }
+            }
+        }
+    }
+}
+
+fn rom_section(language_id: i64, title: &str, syms: &[String], map: &std::collections::BTreeMap<String, String>) -> Markup {
+    html! {
+        @if !syms.is_empty() {
+            h2 { (title) }
+            div.romgrid {
+                @for sym in syms {
+                    label.romcell {
+                        span.psym { "/" (sym) "/" }
+                        input.rom type="text" name="spelling"
+                            value=(map.get(sym).map(String::as_str).unwrap_or(""))
+                            hx-post={ "/languages/" (language_id) "/phonology/romanization/set" }
+                            hx-vals=(format!(r#"{{"symbol":"{sym}"}}"#))
+                            hx-trigger="change"
+                            hx-target="#warnings"
+                            hx-swap="outerHTML";
+                    }
+                }
+            }
+        }
+    }
+}
 
 /// GET /languages/{id}/phonology/romanization
-pub async fn romanization_stub(
+///
+/// Materializes the map on render: suggests spellings for phonemes that
+/// lack one, prunes phonemes that left the inventory, and persists the
+/// result so downstream milestones always find a complete map in the DB.
+pub async fn romanization_page(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+) -> Result<Response, AppError> {
+    let user = match require_user(&state, &session).await? {
+        Ok(u) => u,
+        Err(landing) => return Ok(landing),
+    };
+    let (language, mut phonology) = owned_language_with_phonology(&state, &user, id).await?;
+
+    let changed = romanization::materialize(
+        &mut phonology.romanization,
+        &phonology.consonants,
+        &phonology.vowels,
+        &phonology.diphthongs,
+    );
+    if changed {
+        save_phonology(&state, language.id, &phonology).await?;
+    }
+
+    let mut consonants = phonology.consonants.clone();
+    consonants.sort_by_key(|s| ipa_chart::consonant_order(s));
+    let mut vowels = phonology.vowels.clone();
+    vowels.sort_by_key(|s| ipa_chart::vowel_order(s));
+    let mut diphthongs = phonology.diphthongs.clone();
+    diphthongs.sort_by_key(|d| {
+        let mut ch = d.chars();
+        let n = ch.next().map(|c| ipa_chart::vowel_order(&c.to_string()));
+        let g = ch.next().map(|c| ipa_chart::vowel_order(&c.to_string()));
+        (n, g)
+    });
+
+    let body = html! {
+        p.eyebrow {
+            a href={ "/languages/" (language.id) "/phonology/stress" } class="muted" { "← Stress" }
+        }
+        (wizard_steps("romanization"))
+        h1 { "Romanization" }
+        p {
+            "How " (language.name) " gets written down for human eyes — the "
+            "dictionary, the stories, the family tree all use these "
+            "spellings. Suggestions follow convention (⟨sh⟩ for /ʃ/, "
+            "underdots for retroflexes, grave accents for lax vowels); "
+            "edit any cell, and diphthongs inherit their parts."
+        }
+        (rom_section(language.id, "Consonants", &consonants, &phonology.romanization))
+        (rom_section(language.id, "Vowels", &vowels, &phonology.romanization))
+        (rom_section(language.id, "Diphthongs", &diphthongs, &phonology.romanization))
+        (rom_warnings_fragment(&phonology))
+        form.inline method="get" action={ "/languages/" (language.id) "/phonology/summary" } {
+            button type="submit" { "Continue to summary →" }
+        }
+    };
+    Ok(views::layout("Romanization", Some(&user), body).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct SetSpelling {
+    symbol: String,
+    spelling: String,
+}
+
+/// POST /languages/{id}/phonology/romanization/set (HTMX)
+pub async fn set_romanization(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+    Form(form): Form<SetSpelling>,
+) -> Result<Response, AppError> {
+    let user = match require_user(&state, &session).await? {
+        Ok(u) => u,
+        Err(landing) => return Ok(landing),
+    };
+    let (language, mut phonology) = owned_language_with_phonology(&state, &user, id).await?;
+
+    let in_inventory = phonology.consonants.iter().any(|s| *s == form.symbol)
+        || phonology.vowels.iter().any(|s| *s == form.symbol)
+        || phonology.diphthongs.iter().any(|s| *s == form.symbol);
+    if in_inventory {
+        phonology
+            .romanization
+            .insert(form.symbol, form.spelling.trim().to_string());
+        save_phonology(&state, language.id, &phonology).await?;
+    }
+
+    Ok(rom_warnings_fragment(&phonology).into_response())
+}
+
+// ---------- Summary ----------
+
+/// GET /languages/{id}/phonology/summary
+///
+/// The wizard's closing page: everything decided, in one place, with a
+/// final pass of every warnings engine over the finished system.
+pub async fn summary_page(
     State(state): State<AppState>,
     session: Session,
     Path(id): Path<i64>,
@@ -806,27 +968,96 @@ pub async fn romanization_stub(
     };
     let (language, phonology) = owned_language_with_phonology(&state, &user, id).await?;
     let syl = phonology.syllable.unwrap_or_default();
+    let stress = phonology
+        .stress
+        .as_deref()
+        .and_then(phonotactics::stress_by_id);
+
+    let mut consonants = phonology.consonants.clone();
+    consonants.sort_by_key(|s| ipa_chart::consonant_order(s));
+    let mut vowels = phonology.vowels.clone();
+    vowels.sort_by_key(|s| ipa_chart::vowel_order(s));
+
+    let spelled = |sym: &str| -> String {
+        phonology
+            .romanization
+            .get(sym)
+            .cloned()
+            .unwrap_or_else(|| sym.to_string())
+    };
+
+    let mut review: Vec<String> = Vec::new();
+    review.extend(typology::consonant_warnings(&phonology.consonants));
+    review.extend(typology::vowel_warnings(&phonology.vowels));
+    review.extend(typology::diphthong_warnings(
+        &phonology.diphthongs,
+        &phonology.vowels,
+    ));
+    review.extend(typology::phonotactics_warnings(
+        &syl,
+        phonology.consonants.len(),
+    ));
+    review.extend(romanization::warnings(
+        &phonology.romanization,
+        &ordered_inventory(&phonology),
+    ));
+
     let body = html! {
         p.eyebrow {
-            a href={ "/languages/" (language.id) "/phonology/stress" } class="muted" { "← Stress" }
+            a href={ "/languages/" (language.id) "/phonology/romanization" } class="muted" { "← Romanization" }
         }
-        (wizard_steps("romanization"))
-        h1 { "Romanization" }
-        div.empty {
-            "Auto-suggested phoneme→spelling mappings land in the next "
-            "pass. So far: " (phonology.consonants.len()) " consonants, "
-            (phonology.vowels.len()) " vowels, "
-            (phonology.diphthongs.len()) " diphthongs, syllables shaped "
-            (syl.template())
-            @if let Some(s) = phonology
-                .stress
-                .as_deref()
-                .and_then(phonotactics::stress_by_id)
-            {
-                ", " (s.name.to_lowercase()) " stress"
+        (wizard_steps("summary"))
+        h1 { (language.name) ": the sound system" }
+
+        h2 { "Consonants (" (consonants.len()) ")" }
+        p.ph {
+            @for (i, s) in consonants.iter().enumerate() {
+                @if i > 0 { "  " }
+                "/" (s) "/ ⟨" (spelled(s)) "⟩"
             }
-            " — all saved."
+        }
+        h2 { "Vowels (" (vowels.len()) ")" }
+        p.ph {
+            @for (i, s) in vowels.iter().enumerate() {
+                @if i > 0 { "  " }
+                "/" (s) "/ ⟨" (spelled(s)) "⟩"
+            }
+        }
+        @if !phonology.diphthongs.is_empty() {
+            h2 { "Diphthongs (" (phonology.diphthongs.len()) ")" }
+            p.ph {
+                @for (i, d) in phonology.diphthongs.iter().enumerate() {
+                    @if i > 0 { "  " }
+                    "/" (d) "/ ⟨" (spelled(d)) "⟩"
+                }
+            }
+        }
+        h2 { "Syllables" }
+        p.syltemplate { (syl.template()) }
+        @if let Some(s) = stress {
+            h2 { "Stress" }
+            p { (s.name) " — " span.ph { "[" (s.example) "]" } }
+        }
+
+        h2 { "Typological review" }
+        @if review.is_empty() {
+            p.ok {
+                "A clean bill of health — nothing here would raise a "
+                "field linguist's eyebrow."
+            }
+        } @else {
+            @for w in &review {
+                p.warn { (w) }
+            }
+        }
+
+        form.inline method="get" action={ "/languages/" (language.id) } {
+            button type="submit" { "Finish — back to " (language.name) " →" }
+        }
+        p.muted style="font-size:.9rem" {
+            "Everything stays editable: any wizard step can be revisited "
+            "without losing the others."
         }
     };
-    Ok(views::layout("Romanization", Some(&user), body).into_response())
+    Ok(views::layout("Summary", Some(&user), body).into_response())
 }

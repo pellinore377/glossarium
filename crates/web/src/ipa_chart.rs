@@ -283,6 +283,15 @@ pub fn all_vowel_symbols() -> Vec<&'static str> {
     out
 }
 
+/// Chart-order index for stable sorting of selected consonants on the
+/// romanization and summary pages; unknown symbols sort last.
+pub fn consonant_order(sym: &str) -> usize {
+    all_consonant_symbols()
+        .iter()
+        .position(|s| *s == sym)
+        .unwrap_or(usize::MAX)
+}
+
 /// Chart-order index for stable sorting of selected vowels in the
 /// diphthong grid; unknown symbols sort last.
 pub fn vowel_order(sym: &str) -> usize {

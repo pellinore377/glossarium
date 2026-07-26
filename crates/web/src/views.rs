@@ -108,7 +108,7 @@ ul.presets li {
   background: var(--card); border: 1px solid var(--line);
   border-radius: 6px; padding: 1rem 1.1rem;
 }
-ul.presets .ph {
+.ph {
   font-family: "Gentium Plus", "Times New Roman", serif;
   color: var(--accent-ink); font-size: 1.05rem; margin: 0;
 }
@@ -151,6 +151,29 @@ form.builder .nucleus {
   font: 500 1.5rem/1 ui-monospace, monospace; letter-spacing: .08em;
   color: var(--accent-ink); margin: .3rem 0 .6rem;
 }
+.romgrid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
+  gap: .5rem; margin: .75rem 0 1.25rem;
+}
+.romcell {
+  display: flex; align-items: center; gap: .5rem;
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: 6px; padding: .4rem .6rem;
+}
+.romcell .psym {
+  font: 500 1.05rem/1 "Gentium Plus", "Charis SIL", Gentium,
+    "Times New Roman", serif;
+  color: var(--faded); white-space: nowrap;
+}
+input.rom {
+  font: 500 1.05rem/1.3 "Gentium Plus", "Charis SIL", Gentium,
+    "Times New Roman", serif;
+  width: 100%; min-width: 0; padding: .25rem .4rem;
+  border: 1px solid transparent; border-radius: 4px;
+  background: transparent; color: var(--accent-ink);
+}
+input.rom:hover { border-color: var(--line); }
+input.rom:focus { border-color: var(--accent); outline: none; background: var(--paper); }
 "#;
 
 pub fn layout(title: &str, user: Option<&User>, body: Markup) -> Markup {

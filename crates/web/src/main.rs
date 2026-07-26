@@ -4,6 +4,7 @@ mod error;
 mod ipa_chart;
 mod phonology;
 mod phonotactics;
+mod romanization;
 mod routes;
 mod state;
 mod typology;
@@ -125,7 +126,15 @@ async fn main() -> Result<()> {
         )
         .route(
             "/languages/{id}/phonology/romanization",
-            get(phonology::romanization_stub),
+            get(phonology::romanization_page),
+        )
+        .route(
+            "/languages/{id}/phonology/romanization/set",
+            post(phonology::set_romanization),
+        )
+        .route(
+            "/languages/{id}/phonology/summary",
+            get(phonology::summary_page),
         )
         .layer(session_layer)
         .layer(TraceLayer::new_for_http())
