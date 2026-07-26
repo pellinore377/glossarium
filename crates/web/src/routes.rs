@@ -150,7 +150,9 @@ pub async fn create_language(
     .bind(name)
     .fetch_one(&state.db)
     .await?;
-    Ok(Redirect::to(&format!("/languages/{}", row.0)).into_response())
+    // Straight into the wizard: a language without a phonology is a name
+    // and nothing else, so don't make the user hunt for the next step.
+    Ok(Redirect::to(&format!("/languages/{}/phonology", row.0)).into_response())
 }
 
 /// GET /languages/{id}
@@ -163,16 +165,8 @@ pub async fn show_language(
         Ok(u) => u,
         Err(landing) => return Ok(landing),
     };
-    let language = sqlx::query_as::<_, Language>(
-        "SELECT l.id, l.project_id, l.parent_id, l.name
-         FROM languages l JOIN projects p ON p.id = l.project_id
-         WHERE l.id = ? AND p.user_id = ?",
-    )
-    .bind(id)
-    .bind(user.id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError(anyhow!("language {id} not found for this user")))?;
+    let (language, phonology) =
+        crate::phonology::owned_language_with_phonology(&state, &user, id).await?;
     let project = owned_project(&state, &user, language.project_id).await?;
     let (lexeme_count,): (i64,) =
         sqlx::query_as("SELECT COUNT(*) FROM lexemes WHERE language_id = ?")
@@ -184,10 +178,67 @@ pub async fn show_language(
             .bind(language.id)
             .fetch_one(&state.db)
             .await?;
-    Ok(
-        views::language_page(&user, &project, &language, lexeme_count, change_count)
-            .into_response(),
+    Ok(views::language_page(
+        &user,
+        &project,
+        &language,
+        &phonology,
+        lexeme_count,
+        change_count,
     )
+    .into_response())
+}
+
+#[derive(Deserialize)]
+pub struct RenameLanguage {
+    name: String,
+}
+
+/// POST /languages/{id}/rename
+pub async fn rename_language(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+    Form(form): Form<RenameLanguage>,
+) -> Result<Response, AppError> {
+    let user = match require_user(&state, &session).await? {
+        Ok(u) => u,
+        Err(landing) => return Ok(landing),
+    };
+    let (language, _) =
+        crate::phonology::owned_language_with_phonology(&state, &user, id).await?;
+    let name = form.name.trim();
+    if !name.is_empty() {
+        sqlx::query("UPDATE languages SET name = ? WHERE id = ?")
+            .bind(name)
+            .bind(language.id)
+            .execute(&state.db)
+            .await?;
+    }
+    Ok(Redirect::to(&format!("/languages/{}", language.id)).into_response())
+}
+
+/// POST /languages/{id}/delete
+///
+/// `languages.parent_id` is ON DELETE CASCADE, so deleting a language
+/// takes its entire descendant subtree with it — as does the schema's
+/// cascade on lexemes and sound_changes.
+pub async fn delete_language(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+) -> Result<Response, AppError> {
+    let user = match require_user(&state, &session).await? {
+        Ok(u) => u,
+        Err(landing) => return Ok(landing),
+    };
+    let (language, _) =
+        crate::phonology::owned_language_with_phonology(&state, &user, id).await?;
+    sqlx::query("DELETE FROM languages WHERE id = ?")
+        .bind(language.id)
+        .execute(&state.db)
+        .await?;
+    Ok(Redirect::to(&format!("/projects/{}", language.project_id)).into_response())
 }
 
 /// Convenience so views can be returned directly from small handlers later.

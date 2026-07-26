@@ -81,6 +81,8 @@ async fn main() -> Result<()> {
         .route("/projects/{id}", get(routes::show_project))
         .route("/projects/{id}/languages", post(routes::create_language))
         .route("/languages/{id}", get(routes::show_language))
+        .route("/languages/{id}/rename", post(routes::rename_language))
+        .route("/languages/{id}/delete", post(routes::delete_language))
         .route("/languages/{id}/phonology", get(phonology::aesthetic_page))
         .route(
             "/languages/{id}/phonology/aesthetic",

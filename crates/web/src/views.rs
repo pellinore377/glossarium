@@ -9,6 +9,8 @@
 use maud::{html, Markup, DOCTYPE};
 
 use crate::auth::User;
+use crate::ipa_chart::{self, Cell};
+use crate::phonology::Phonology;
 use crate::routes::{Language, Project};
 
 const STYLE: &str = r#"
@@ -203,6 +205,25 @@ button.mini {
 }
 form.rowedit { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; }
 form.rowedit input[type=text] { min-width: 0; flex: 1 1 8rem; }
+nav.langtabs {
+  display: flex; gap: .25rem; flex-wrap: wrap; align-items: baseline;
+  border-bottom: 1px solid var(--line); margin: 1.2rem 0 1.5rem;
+}
+nav.langtabs a, nav.langtabs span.soon {
+  padding: .45rem .9rem; text-decoration: none; font-size: .92rem;
+  border: 1px solid transparent; border-bottom: none;
+  border-radius: 6px 6px 0 0;
+}
+nav.langtabs a { color: var(--accent-ink); }
+nav.langtabs a:hover { background: var(--card); border-color: var(--line); }
+nav.langtabs span.soon { color: var(--faded); font-size: .82rem; }
+.symro {
+  font: 600 1.05rem/1 "Gentium Plus", "Charis SIL", Gentium,
+    "Times New Roman", serif;
+  color: var(--accent-ink); padding: .15rem .25rem; display: inline-block;
+}
+.settings { margin-top: 2.5rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+form.danger button { background: #8a3232; border-color: #8a3232; }
 ol.chain { margin: 1rem 0; padding-left: 1.6rem; }
 ol.chain li {
   background: var(--card); border: 1px solid var(--line); border-radius: 6px;
@@ -325,20 +346,137 @@ pub fn project_page(user: &User, project: &Project, languages: &[Language]) -> M
                 button type="submit" { "Found language" }
             }
             p.muted style="font-size:.9rem" {
-                "Next milestone: this button opens the phonology wizard "
-                "(consonants → vowels → diphthongs → phonotactics → romanization)."
+                "Founding a language drops you straight into the phonology "
+                "wizard: aesthetic → consonants → vowels → syllables → "
+                "romanization."
             }
         },
     )
+}
+
+fn language_tabs(language: &Language, lexeme_count: i64, change_count: i64) -> Markup {
+    html! {
+        nav.langtabs {
+            @if language.parent_id.is_some() {
+                a href={ "/languages/" (language.id) "/changes" } {
+                    "Sound changes (" (change_count) ")"
+                }
+                a href={ "/languages/" (language.id) "/lexicon" } { "Lexicon" }
+            } @else {
+                a href={ "/languages/" (language.id) "/phonology" } { "Phonology" }
+                a href={ "/languages/" (language.id) "/lexicon" } {
+                    "Lexicon"
+                    @if lexeme_count > 0 { " (" (lexeme_count) ")" }
+                }
+            }
+            span.soon { "Grammar · soon" }
+            span.soon { "Stories · soon" }
+        }
+    }
+}
+
+fn row_has_selection(row: &ipa_chart::MannerRow, sel: &dyn Fn(&str) -> bool) -> bool {
+    row.cells.iter().any(|c| {
+        matches!(c, Cell::Sounds { vl, vd, .. }
+            if vl.map(|s| sel(s)).unwrap_or(false) || vd.map(|s| sel(s)).unwrap_or(false))
+    })
+}
+
+/// Read-only phoneme charts for a language's home page: the wizard's
+/// layouts, stripped of interaction, showing only what was selected.
+fn phoneme_charts(phonology: &Phonology) -> Markup {
+    let cs = |s: &str| phonology.consonants.iter().any(|x| x == s);
+    let vs = |s: &str| phonology.vowels.iter().any(|x| x == s);
+    html! {
+        @if !phonology.consonants.is_empty() {
+            p.eyebrow { "Consonants (" (phonology.consonants.len()) ")" }
+            div.chart-scroll {
+                table.ipa {
+                    thead {
+                        tr {
+                            th {}
+                            @for p in ipa_chart::PLACES { th { (p) } }
+                        }
+                    }
+                    tbody {
+                        @for row in ipa_chart::CONSONANT_ROWS {
+                            @if row_has_selection(row, &cs) {
+                                tr {
+                                    th.manner { (row.name) }
+                                    @for cell in row.cells {
+                                        @match cell {
+                                            Cell::Sounds { span, vl, vd } => {
+                                                td colspan=(span) {
+                                                    @if let Some(s) = vl {
+                                                        @if cs(s) { span.symro { (s) } }
+                                                    }
+                                                    @if let Some(s) = vd {
+                                                        @if cs(s) { span.symro { (s) } }
+                                                    }
+                                                }
+                                            }
+                                            Cell::Shaded { span } => { td.x colspan=(span) {} }
+                                            Cell::Empty { span } => { td colspan=(span) {} }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        @if !phonology.vowels.is_empty() {
+            p.eyebrow { "Vowels (" (phonology.vowels.len()) ")" }
+            div.vowel-wrap {
+                svg.trap viewBox="0 0 100 100" preserveAspectRatio="none" {
+                    polygon points="8,7 92,7 92,88 38,88" fill="none"
+                        stroke="var(--line)" stroke-width="1"
+                        vector-effect="non-scaling-stroke" {}
+                    line x1="19" y1="34" x2="92" y2="34" stroke="var(--line)"
+                        stroke-width="1" vector-effect="non-scaling-stroke" {}
+                    line x1="29" y1="61" x2="92" y2="61" stroke="var(--line)"
+                        stroke-width="1" vector-effect="non-scaling-stroke" {}
+                    line x1="50" y1="7" x2="63" y2="88" stroke="var(--line)"
+                        stroke-width="1" vector-effect="non-scaling-stroke" {}
+                }
+                @for p in ipa_chart::VOWEL_POINTS {
+                    @let show = p.unrounded.map(|s| vs(s)).unwrap_or(false)
+                        || p.rounded.map(|s| vs(s)).unwrap_or(false);
+                    @if show {
+                        div.vpoint style={ "left:" (p.x) "%;top:" (p.y) "%" } {
+                            @if let Some(s) = p.unrounded {
+                                @if vs(s) { span.symro { (s) } }
+                            }
+                            @if let Some(s) = p.rounded {
+                                @if vs(s) { span.symro { (s) } }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        @if !phonology.diphthongs.is_empty() {
+            p.eyebrow { "Diphthongs (" (phonology.diphthongs.len()) ")" }
+            p.ph {
+                @for (i, d) in phonology.diphthongs.iter().enumerate() {
+                    @if i > 0 { "  " }
+                    "/" (d) "/"
+                }
+            }
+        }
+    }
 }
 
 pub fn language_page(
     user: &User,
     project: &Project,
     language: &Language,
+    phonology: &Phonology,
     lexeme_count: i64,
     change_count: i64,
 ) -> Markup {
+    let wizard_done = !phonology.consonants.is_empty() && !phonology.vowels.is_empty();
     layout(
         &language.name,
         Some(user),
@@ -349,28 +487,35 @@ pub fn language_page(
             h1 { (language.name) }
             @if language.parent_id.is_none() {
                 p.muted { "Proto-language of this family." }
-                form.inline method="get" action={ "/languages/" (language.id) "/phonology" } {
-                    button type="submit" { "Design the phonology →" }
-                }
-                form.inline method="get" action={ "/languages/" (language.id) "/lexicon" } {
-                    button type="submit" {
-                        @if lexeme_count > 0 {
-                            "Open the lexicon (" (lexeme_count) " entries) →"
-                        } @else {
-                            "Seed the lexicon →"
-                        }
-                    }
-                }
             } @else {
-                form.inline method="get" action={ "/languages/" (language.id) "/changes" } {
-                    button type="submit" {
-                        "Sound changes (" (change_count) ") →"
-                    }
-                }
-                form.inline method="get" action={ "/languages/" (language.id) "/lexicon" } {
-                    button type="submit" { "View the derived lexicon →" }
+                p.muted {
+                    "Daughter language — its lexicon is derived from the "
+                    "parent through its sound-change chain."
                 }
             }
+            (language_tabs(language, lexeme_count, change_count))
+
+            @if language.parent_id.is_none() {
+                @if wizard_done {
+                    h2 { "Sound system" }
+                    (phoneme_charts(phonology))
+                    p.muted style="font-size:.9rem" {
+                        a href={ "/languages/" (language.id) "/phonology" } {
+                            "Edit the phonology →"
+                        }
+                    }
+                } @else {
+                    div.empty {
+                        "No phonology yet. The wizard walks you from an "
+                        "aesthetic through consonants, vowels, syllables, "
+                        "and romanization."
+                    }
+                    form.inline method="get" action={ "/languages/" (language.id) "/phonology" } {
+                        button type="submit" { "Design the phonology →" }
+                    }
+                }
+            }
+
             h2 { "Evolve" }
             p.muted style="font-size:.9rem" {
                 "A daughter starts as a perfect copy and drifts one sound "
@@ -380,6 +525,19 @@ pub fn language_page(
             form.inline method="post" action={ "/languages/" (language.id) "/evolve" } {
                 input type="text" name="name" placeholder="Daughter language name" required;
                 button type="submit" { "Evolve a daughter →" }
+            }
+
+            div.settings {
+                p.eyebrow { "Settings" }
+                form.inline method="post" action={ "/languages/" (language.id) "/rename" } {
+                    input type="text" name="name" value=(language.name) required;
+                    button.quiet type="submit" { "Rename" }
+                }
+                form.inline.danger method="post"
+                    action={ "/languages/" (language.id) "/delete" }
+                    onsubmit="return confirm('Delete this language and every daughter descended from it? This cannot be undone.')" {
+                    button type="submit" { "Delete language" }
+                }
             }
         },
     )
