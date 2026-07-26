@@ -1,0 +1,4 @@
+target/
+data/
+pocket-id-data/
+.env

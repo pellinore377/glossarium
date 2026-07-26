@@ -1,0 +1,10 @@
+[package]
+name = "sca"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+phon = { path = "../phon" }
+serde.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,39 @@
+services:
+  glossarium:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      BASE_URL: ${BASE_URL:-http://localhost:8080}
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
+      # Set true once you're serving over HTTPS via your reverse proxy.
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      # Local dev only — never in a deployed environment:
+      # AUTH_DISABLED: "true"
+      RUST_LOG: info
+    volumes:
+      - ./data:/data
+
+  # Remove this whole service if you already run Pocket ID elsewhere on
+  # your server — just point OIDC_ISSUER_URL at your existing instance.
+  pocket-id:
+    image: ghcr.io/pocket-id/pocket-id:v2
+    restart: unless-stopped
+    ports:
+      - "1411:1411"
+    environment:
+      # Must be the public URL you reach Pocket ID at (passkeys are
+      # origin-bound, so this has to match exactly).
+      APP_URL: ${POCKET_ID_URL:-http://localhost:1411}
+      TRUST_PROXY: "true"
+    volumes:
+      - ./pocket-id-data:/app/data
+    healthcheck:
+      test: ["CMD", "/app/pocket-id", "healthcheck"]
+      interval: 1m30s
+      timeout: 5s
+      retries: 2
+      start_period: 10s
