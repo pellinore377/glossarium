@@ -46,7 +46,7 @@ pub struct Phonology {
     pub romanization: std::collections::BTreeMap<String, String>,
 }
 
-async fn owned_language_with_phonology(
+pub(crate) async fn owned_language_with_phonology(
     state: &AppState,
     user: &User,
     id: i64,
@@ -83,7 +83,7 @@ async fn save_phonology(state: &AppState, language_id: i64, p: &Phonology) -> Re
     Ok(())
 }
 
-async fn require_user(state: &AppState, session: &Session) -> Result<Result<User, Response>, AppError> {
+pub(crate) async fn require_user(state: &AppState, session: &Session) -> Result<Result<User, Response>, AppError> {
     match current_user(state, session).await? {
         Some(u) => Ok(Ok(u)),
         None => Ok(Err(views::landing().into_response())),

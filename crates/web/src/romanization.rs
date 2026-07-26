@@ -144,6 +144,32 @@ pub fn materialize(
     changed
 }
 
+/// Spell an IPA form using the language's romanization map: greedy
+/// longest-match, so two-character diphthong keys win over their
+/// component vowels. Unmapped characters pass through unchanged.
+pub fn romanize(form: &str, map: &BTreeMap<String, String>) -> String {
+    let chars: Vec<char> = form.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if i + 1 < chars.len() {
+            let two: String = chars[i..i + 2].iter().collect();
+            if let Some(sp) = map.get(&two) {
+                out.push_str(sp);
+                i += 2;
+                continue;
+            }
+        }
+        let one = chars[i].to_string();
+        match map.get(&one) {
+            Some(sp) => out.push_str(sp),
+            None => out.push_str(&one),
+        }
+        i += 1;
+    }
+    out
+}
+
 /// Audit the map: spellings doing double duty, and phonemes spelled as
 /// nothing. `ordered` fixes presentation order (chart order upstream).
 pub fn warnings(map: &BTreeMap<String, String>, ordered: &[String]) -> Vec<String> {
@@ -225,6 +251,18 @@ mod tests {
         map.insert("i".to_string(), "j".to_string());
         materialize(&mut map, &[], &s(&["a", "i"]), &s(&["ai"]));
         assert_eq!(map.get("ai").unwrap(), "aj");
+    }
+
+    #[test]
+    fn romanize_prefers_diphthong_keys() {
+        let mut map = BTreeMap::new();
+        map.insert("ʃ".to_string(), "sh".to_string());
+        map.insert("a".to_string(), "a".to_string());
+        map.insert("i".to_string(), "i".to_string());
+        map.insert("ai".to_string(), "ay".to_string());
+        assert_eq!(romanize("ʃai", &map), "shay");
+        assert_eq!(romanize("ʃia", &map), "shia");
+        assert_eq!(romanize("q", &map), "q"); // unmapped passes through
     }
 
     #[test]

@@ -174,7 +174,12 @@ pub async fn show_language(
     .await?
     .ok_or_else(|| AppError(anyhow!("language {id} not found for this user")))?;
     let project = owned_project(&state, &user, language.project_id).await?;
-    Ok(views::language_page(&user, &project, &language).into_response())
+    let (lexeme_count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM lexemes WHERE language_id = ?")
+            .bind(language.id)
+            .fetch_one(&state.db)
+            .await?;
+    Ok(views::language_page(&user, &project, &language, lexeme_count).into_response())
 }
 
 /// Convenience so views can be returned directly from small handlers later.

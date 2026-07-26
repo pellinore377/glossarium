@@ -174,6 +174,35 @@ input.rom {
 }
 input.rom:hover { border-color: var(--line); }
 input.rom:focus { border-color: var(--accent); outline: none; background: var(--paper); }
+main:has(table.lex) { max-width: 68rem; }
+.lexbar { margin: 1rem 0 .5rem; }
+.lexbar input[type=search] {
+  font: inherit; width: 100%; padding: .5rem .7rem;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--card); color: var(--ink);
+}
+form.addlex {
+  display: flex; gap: .4rem; flex-wrap: wrap; margin: 0 0 1rem;
+}
+form.addlex input[type=text] { min-width: 0; flex: 1 1 9rem; }
+form.addlex input.ph { flex: 1 1 8rem; }
+table.lex { border-collapse: collapse; width: 100%; min-width: 44rem; }
+table.lex th, table.lex td {
+  border-bottom: 1px solid var(--line); padding: .45rem .6rem;
+  text-align: left; vertical-align: baseline;
+}
+table.lex thead th {
+  font: 500 .72rem/1.3 ui-monospace, monospace; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--faded);
+}
+table.lex td.gloss { font-weight: 500; }
+table.lex td.notes { font-size: .88rem; max-width: 14rem; }
+table.lex td.actions { white-space: nowrap; text-align: right; }
+button.mini {
+  font-size: .78rem; padding: .2rem .55rem; margin-left: .25rem;
+}
+form.rowedit { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; }
+form.rowedit input[type=text] { min-width: 0; flex: 1 1 8rem; }
 "#;
 
 pub fn layout(title: &str, user: Option<&User>, body: Markup) -> Markup {
@@ -296,7 +325,12 @@ pub fn project_page(user: &User, project: &Project, languages: &[Language]) -> M
     )
 }
 
-pub fn language_page(user: &User, project: &Project, language: &Language) -> Markup {
+pub fn language_page(
+    user: &User,
+    project: &Project,
+    language: &Language,
+    lexeme_count: i64,
+) -> Markup {
     layout(
         &language.name,
         Some(user),
@@ -311,9 +345,18 @@ pub fn language_page(user: &User, project: &Project, language: &Language) -> Mar
             form.inline method="get" action={ "/languages/" (language.id) "/phonology" } {
                 button type="submit" { "Design the phonology →" }
             }
+            form.inline method="get" action={ "/languages/" (language.id) "/lexicon" } {
+                button type="submit" {
+                    @if lexeme_count > 0 {
+                        "Open the lexicon (" (lexeme_count) " entries) →"
+                    } @else {
+                        "Seed the lexicon →"
+                    }
+                }
+            }
             div.empty {
-                "Lexicon and the evolve menu land here in later milestones. "
-                "The schema underneath is already shaped for them."
+                "The evolve menu — daughter languages through documented "
+                "sound changes — lands in the next milestone."
             }
         },
     )

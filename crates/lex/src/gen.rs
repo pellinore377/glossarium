@@ -1,0 +1,408 @@
+//! Deterministic proto-root generator.
+//!
+//! Given a phoneme inventory and syllable constraints, produce word forms
+//! that (a) are reproducible from a seed — same language, same seed, same
+//! lexicon, forever — and (b) sound like they belong to one language
+//! rather than a random symbol soup. Two mechanisms carry (b): phonemes
+//! are sampled by cross-linguistic frequency weights rather than
+//! uniformly, and clusters must ramp sonority toward the nucleus (with
+//! the classic sibilant-plus-stop exception, because /st-/ is too good to
+//! ban).
+//!
+//! No `rand` dependency: a hand-rolled splitmix64 keeps the byte-for-byte
+//! output of a seed independent of any crate's version bump.
+
+use std::collections::HashSet;
+use std::fmt;
+
+// ---------- RNG ----------
+
+/// splitmix64: tiny, fast, and — critically — ours, so a `cargo update`
+/// can never silently reshuffle every proto-language on the server.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// Uniform in [0, n). Modulo bias is irrelevant at these ranges.
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n.max(1)
+    }
+
+    fn pick_weighted<'a, T>(&mut self, items: &'a [(T, u32)]) -> &'a T {
+        let total: u64 = items.iter().map(|(_, w)| u64::from(*w)).sum();
+        let mut r = self.below(total.max(1));
+        for (item, w) in items {
+            let w = u64::from(*w);
+            if r < w {
+                return item;
+            }
+            r -= w;
+        }
+        &items[items.len() - 1].0
+    }
+}
+
+// ---------- Frequency weights ----------
+
+/// Rough cross-linguistic phoneme frequencies (UPSID-flavored): /t n m k/
+/// are everywhere, /ɢ ʙ ɶ/ are prized rarities. Anything unlisted gets
+/// DEFAULT_WEIGHT — present but uncommon, which is exactly right for the
+/// exotic corners of the chart.
+const CONSONANT_WEIGHTS: &[(&str, u32)] = &[
+    ("t", 97), ("n", 96), ("m", 95), ("k", 90), ("s", 86), ("j", 84),
+    ("p", 82), ("w", 80), ("l", 76), ("r", 72), ("b", 70), ("h", 64),
+    ("d", 64), ("ɡ", 62), ("ŋ", 52), ("f", 48), ("ʔ", 42), ("ʃ", 40),
+    ("ɾ", 38), ("ɲ", 34), ("x", 30), ("z", 30), ("v", 28), ("ts", 26),
+    ("dʒ", 24), ("ʒ", 20), ("c", 18), ("ɟ", 16), ("q", 14), ("ð", 10),
+    ("θ", 10), ("β", 10), ("ɣ", 14), ("χ", 10), ("ħ", 8), ("ʂ", 12),
+    ("ʐ", 8), ("ɳ", 10), ("ʈ", 10), ("ɖ", 8),
+];
+
+const VOWEL_WEIGHTS: &[(&str, u32)] = &[
+    ("a", 98), ("i", 92), ("u", 88), ("e", 74), ("o", 74), ("ə", 48),
+    ("ɛ", 42), ("ɔ", 42), ("æ", 30), ("ɑ", 30), ("ɪ", 30), ("ʊ", 26),
+    ("ɨ", 22), ("ʌ", 20), ("ɯ", 18), ("y", 14), ("ø", 12), ("œ", 10),
+];
+
+const DEFAULT_WEIGHT: u32 = 12;
+const DIPHTHONG_WEIGHT: u32 = 14;
+
+fn weight_of(sym: &str, table: &[(&str, u32)]) -> u32 {
+    table
+        .iter()
+        .find(|(s, _)| *s == sym)
+        .map(|(_, w)| *w)
+        .unwrap_or(DEFAULT_WEIGHT)
+}
+
+// ---------- Sonority ----------
+
+/// 1 = plosive … 5 = glide/approximant. Onsets must climb toward the
+/// nucleus, codas must descend from it.
+fn sonority(sym: &str) -> u8 {
+    const NASALS: &[&str] = &["m", "ɱ", "n", "ɳ", "ɲ", "ŋ", "ɴ"];
+    const LIQUIDS: &[&str] = &[
+        "l", "ɭ", "ʎ", "ʟ", "r", "ʀ", "ʙ", "ɾ", "ɽ", "ⱱ", "ɬ", "ɮ",
+    ];
+    const GLIDES: &[&str] = &["j", "ɰ", "w", "ɥ", "ʋ", "ɹ", "ɻ"];
+    const FRICATIVES: &[&str] = &[
+        "ɸ", "β", "f", "v", "θ", "ð", "s", "z", "ʃ", "ʒ", "ʂ", "ʐ", "ç",
+        "ʝ", "x", "ɣ", "χ", "ʁ", "ħ", "ʕ", "h", "ɦ",
+    ];
+    if GLIDES.contains(&sym) {
+        5
+    } else if LIQUIDS.contains(&sym) {
+        4
+    } else if NASALS.contains(&sym) {
+        3
+    } else if FRICATIVES.contains(&sym) {
+        2
+    } else {
+        1 // plosives, and a safe default for anything unclassified
+    }
+}
+
+fn is_sibilant(sym: &str) -> bool {
+    matches!(sym, "s" | "z" | "ʃ" | "ʒ" | "ʂ" | "ʐ")
+}
+
+// ---------- Generator ----------
+
+#[derive(Debug, Clone)]
+pub struct WordSpec {
+    pub consonants: Vec<String>,
+    pub vowels: Vec<String>,
+    pub diphthongs: Vec<String>,
+    pub onset_min: u8,
+    pub onset_max: u8,
+    pub coda_min: u8,
+    pub coda_max: u8,
+    pub seed: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GenError {
+    /// No vowels or diphthongs — nothing can be a nucleus.
+    NoNuclei,
+    /// The template demands consonants the inventory doesn't have.
+    NoConsonants,
+}
+
+impl fmt::Display for GenError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            GenError::NoNuclei => {
+                write!(f, "the inventory has no vowels to build syllables around")
+            }
+            GenError::NoConsonants => write!(
+                f,
+                "the syllable template requires consonants, but none are selected"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for GenError {}
+
+pub struct Generator {
+    consonants: Vec<(String, u32)>,
+    nuclei: Vec<(String, u32)>,
+    onset_min: u8,
+    onset_max: u8,
+    coda_min: u8,
+    coda_max: u8,
+    rng: Rng,
+    used: HashSet<String>,
+}
+
+/// Preference for margin length within the allowed range. Onsets like to
+/// exist (most syllables on Earth start with a consonant); codas like to
+/// not. Index = cluster length.
+const ONSET_LEN_WEIGHTS: [u32; 4] = [3, 10, 3, 1];
+const CODA_LEN_WEIGHTS: [u32; 4] = [10, 5, 2, 1];
+
+/// Root length in syllables: disyllables dominate, monosyllables are
+/// common, trisyllables spice.
+const SYLLABLE_COUNT_WEIGHTS: [(usize, u32); 3] = [(1, 30), (2, 50), (3, 20)];
+
+impl Generator {
+    pub fn new(spec: WordSpec) -> Result<Self, GenError> {
+        let mut nuclei: Vec<(String, u32)> = spec
+            .vowels
+            .iter()
+            .map(|v| (v.clone(), weight_of(v, VOWEL_WEIGHTS)))
+            .collect();
+        nuclei.extend(
+            spec.diphthongs
+                .iter()
+                .map(|d| (d.clone(), DIPHTHONG_WEIGHT)),
+        );
+        if nuclei.is_empty() {
+            return Err(GenError::NoNuclei);
+        }
+        let consonants: Vec<(String, u32)> = spec
+            .consonants
+            .iter()
+            .map(|c| (c.clone(), weight_of(c, CONSONANT_WEIGHTS)))
+            .collect();
+        if consonants.is_empty() && (spec.onset_min > 0 || spec.coda_min > 0) {
+            return Err(GenError::NoConsonants);
+        }
+        Ok(Self {
+            consonants,
+            nuclei,
+            onset_min: spec.onset_min,
+            onset_max: spec.onset_max,
+            coda_min: spec.coda_min,
+            coda_max: spec.coda_max,
+            rng: Rng(spec.seed),
+            used: HashSet::new(),
+        })
+    }
+
+    fn margin_len(&mut self, min: u8, max: u8, weights: &[u32; 4]) -> usize {
+        if self.consonants.is_empty() {
+            return 0;
+        }
+        let choices: Vec<(usize, u32)> = (min..=max.min(3))
+            .map(|l| (l as usize, weights[l as usize]))
+            .collect();
+        if choices.is_empty() {
+            return min as usize;
+        }
+        *self.rng.pick_weighted(&choices)
+    }
+
+    /// One consonant obeying the cluster constraint against `prev`:
+    /// onsets rise in sonority (sibilant + stop excepted, so /st- sp-/
+    /// survive), codas fall. A few rejected samples and we give up and
+    /// end the cluster early — a shorter cluster is always legal.
+    fn cluster_next(&mut self, prev: Option<&str>, rising: bool) -> Option<String> {
+        for _ in 0..12 {
+            let c = self.rng.pick_weighted(&self.consonants).clone();
+            match prev {
+                None => return Some(c),
+                Some(p) => {
+                    if p == c {
+                        continue; // no geminates inside a cluster
+                    }
+                    let ok = if rising {
+                        sonority(&c) > sonority(p) || (is_sibilant(p) && sonority(&c) == 1)
+                    } else {
+                        sonority(&c) < sonority(p)
+                    };
+                    if ok {
+                        return Some(c);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn cluster(&mut self, len: usize, rising: bool) -> Vec<String> {
+        let mut out: Vec<String> = Vec::with_capacity(len);
+        for _ in 0..len {
+            match self.cluster_next(out.last().map(String::as_str), rising) {
+                Some(c) => out.push(c),
+                None => break,
+            }
+        }
+        out
+    }
+
+    /// One word form, not yet checked for uniqueness.
+    fn raw_word(&mut self, syllables: usize) -> String {
+        let mut segs: Vec<String> = Vec::new();
+        for i in 0..syllables {
+            let onset_len = self.margin_len(self.onset_min, self.onset_max, &ONSET_LEN_WEIGHTS);
+            let mut onset = self.cluster(onset_len, true);
+            // Avoid an accidental geminate across the syllable boundary.
+            if let (Some(last), Some(first)) = (segs.last(), onset.first()) {
+                if last == first && onset.len() == 1 && self.onset_min == 0 {
+                    onset.clear();
+                }
+            }
+            // Respect a mandatory onset even if the cluster walk stalled.
+            if onset.len() < self.onset_min as usize && !self.consonants.is_empty() {
+                while onset.len() < self.onset_min as usize {
+                    let c = self.rng.pick_weighted(&self.consonants).clone();
+                    onset.push(c);
+                }
+            }
+            segs.extend(onset);
+            segs.push(self.rng.pick_weighted(&self.nuclei).clone());
+            // Word-internal codas are rarer than word-final ones; skip
+            // them half the time to keep medial clusters tasteful.
+            let is_final = i + 1 == syllables;
+            let coda_allowed = is_final || self.coda_min > 0 || self.rng.below(2) == 0;
+            if coda_allowed {
+                let coda_len = self.margin_len(self.coda_min, self.coda_max, &CODA_LEN_WEIGHTS);
+                let mut coda = self.cluster(coda_len, false);
+                if coda.len() < self.coda_min as usize && !self.consonants.is_empty() {
+                    while coda.len() < self.coda_min as usize {
+                        let c = self.rng.pick_weighted(&self.consonants).clone();
+                        coda.push(c);
+                    }
+                }
+                segs.extend(coda);
+            }
+        }
+        segs.concat()
+    }
+
+    /// A word no previous call on this generator has returned.
+    pub fn word(&mut self) -> String {
+        for attempt in 0..200usize {
+            // Once collisions start, push toward longer words for entropy.
+            let syllables = if attempt < 50 {
+                *self.rng.pick_weighted(&SYLLABLE_COUNT_WEIGHTS)
+            } else {
+                2 + (attempt / 50).min(2)
+            };
+            let w = self.raw_word(syllables);
+            if self.used.insert(w.clone()) {
+                return w;
+            }
+        }
+        // Astronomically unlikely with any usable inventory; accept the
+        // homophone rather than loop forever. Natural languages have
+        // homophones too.
+        let w = self.raw_word(3);
+        self.used.insert(w.clone());
+        w
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
+    }
+
+    fn spec(seed: u64) -> WordSpec {
+        WordSpec {
+            consonants: s(&["p", "t", "k", "m", "n", "s", "l", "r", "j"]),
+            vowels: s(&["a", "i", "u", "e", "o"]),
+            diphthongs: s(&["ai", "au"]),
+            onset_min: 0,
+            onset_max: 2,
+            coda_min: 0,
+            coda_max: 1,
+            seed,
+        }
+    }
+
+    #[test]
+    fn same_seed_same_lexicon() {
+        let words = |seed| {
+            let mut g = Generator::new(spec(seed)).unwrap();
+            (0..50).map(|_| g.word()).collect::<Vec<_>>()
+        };
+        assert_eq!(words(42), words(42));
+        assert_ne!(words(42), words(43));
+    }
+
+    #[test]
+    fn words_are_unique_and_from_inventory() {
+        let mut g = Generator::new(spec(7)).unwrap();
+        let mut seen = HashSet::new();
+        for _ in 0..200 {
+            let w = g.word();
+            assert!(seen.insert(w.clone()), "duplicate {w}");
+            for c in w.chars() {
+                assert!(
+                    "ptkmnslrjaiueo".contains(c),
+                    "{w} contains out-of-inventory {c}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mandatory_onset_respected() {
+        let mut sp = spec(9);
+        sp.onset_min = 1;
+        let mut g = Generator::new(sp).unwrap();
+        for _ in 0..100 {
+            let w = g.word();
+            let first = w.chars().next().unwrap();
+            assert!(
+                "ptkmnslrj".contains(first),
+                "{w} starts with a vowel despite onset_min=1"
+            );
+        }
+    }
+
+    #[test]
+    fn cv_only_spec_yields_cv_words() {
+        let mut sp = spec(11);
+        sp.onset_max = 1;
+        sp.coda_max = 0;
+        let mut g = Generator::new(sp).unwrap();
+        for _ in 0..100 {
+            let w = g.word();
+            assert!(
+                w.chars().last().map(|c| "aiueo".contains(c)).unwrap(),
+                "{w} ends in a consonant despite coda_max=0"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_inventory_is_an_error() {
+        let mut sp = spec(1);
+        sp.vowels.clear();
+        sp.diphthongs.clear();
+        assert_eq!(Generator::new(sp).unwrap_err(), GenError::NoNuclei);
+    }
+}

@@ -2,6 +2,7 @@ mod auth;
 mod config;
 mod error;
 mod ipa_chart;
+mod lexicon;
 mod phonology;
 mod phonotactics;
 mod romanization;
@@ -136,6 +137,19 @@ async fn main() -> Result<()> {
             "/languages/{id}/phonology/summary",
             get(phonology::summary_page),
         )
+        .route(
+            "/languages/{id}/lexicon",
+            get(lexicon::lexicon_page).post(lexicon::create_lexeme),
+        )
+        .route("/languages/{id}/lexicon/seed", post(lexicon::seed_lexicon))
+        .route(
+            "/languages/{id}/lexicon/search",
+            get(lexicon::search_lexicon),
+        )
+        .route("/lexemes/{id}", post(lexicon::update_lexeme))
+        .route("/lexemes/{id}/edit", get(lexicon::lexeme_edit_row))
+        .route("/lexemes/{id}/row", get(lexicon::lexeme_display_row))
+        .route("/lexemes/{id}/delete", post(lexicon::delete_lexeme))
         .layer(session_layer)
         .layer(TraceLayer::new_for_http())
         .with_state(state);
