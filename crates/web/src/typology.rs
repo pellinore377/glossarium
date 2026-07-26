@@ -228,6 +228,65 @@ pub fn diphthong_warnings(diphthongs: &[String], vowels: &[String]) -> Vec<Strin
     warnings
 }
 
+pub fn phonotactics_warnings(
+    syl: &crate::phonotactics::SyllableStructure,
+    consonant_count: usize,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+
+    if syl.onset_max == 0 {
+        warnings.push(
+            "No onsets at all. Every documented language allows syllables \
+             to begin with a consonant — CV is the one universally shared \
+             syllable type."
+                .to_string(),
+        );
+    }
+    if syl.onset_min >= 2 {
+        warnings.push(
+            "Every syllable must begin with a consonant cluster. Even the \
+             most cluster-loving languages (Georgian, Russian) let plain \
+             CV syllables exist; an obligatory branching onset is \
+             unattested."
+                .to_string(),
+        );
+    }
+    if syl.coda_min >= 1 {
+        warnings.push(
+            "Mandatory codas — no open syllables anywhere. This is \
+             essentially unattested: languages that require closed \
+             syllables in citation forms still leak CV somewhere."
+                .to_string(),
+        );
+    }
+    if syl.onset_max >= 3 || syl.coda_max >= 3 {
+        warnings.push(
+            "Three-consonant margins put you at the English/Slavic end of \
+             the spectrum. Real languages this permissive still restrict \
+             which clusters occur (English CCC-onsets must start with /s/) \
+             — the lexicon generator will lean on sonority to keep \
+             results pronounceable."
+                .to_string(),
+        );
+    }
+    if consonant_count == 0 && syl.onset_max > 0 {
+        warnings.push(
+            "The template has consonant slots, but the inventory has no \
+             consonants yet — the generator will have nothing to fill \
+             them with."
+                .to_string(),
+        );
+    } else if consonant_count > 0 && consonant_count < 6 && syl.onset_max >= 2 {
+        warnings.push(format!(
+            "Clusters from only {consonant_count} consonants will feel \
+             repetitive fast — small inventories (Hawaiian: 8) almost \
+             always pair with simple syllables."
+        ));
+    }
+
+    warnings
+}
+
 #[cfg(test)]
 mod vowel_tests {
     use super::*;
@@ -256,6 +315,48 @@ mod vowel_tests {
     #[test]
     fn empty_selection_is_quiet() {
         assert!(consonant_warnings(&[]).is_empty());
+    }
+
+    #[test]
+    fn modest_syllable_is_clean() {
+        let syl = crate::phonotactics::SyllableStructure::default();
+        assert!(phonotactics_warnings(&syl, 15).is_empty());
+    }
+
+    #[test]
+    fn banned_onsets_flagged() {
+        let syl = crate::phonotactics::SyllableStructure {
+            onset_min: 0,
+            onset_max: 0,
+            coda_min: 0,
+            coda_max: 1,
+        };
+        let w = phonotactics_warnings(&syl, 15);
+        assert!(w.iter().any(|w| w.contains("No onsets")));
+    }
+
+    #[test]
+    fn mandatory_coda_flagged() {
+        let syl = crate::phonotactics::SyllableStructure {
+            onset_min: 0,
+            onset_max: 1,
+            coda_min: 1,
+            coda_max: 1,
+        };
+        let w = phonotactics_warnings(&syl, 15);
+        assert!(w.iter().any(|w| w.contains("Mandatory codas")));
+    }
+
+    #[test]
+    fn tiny_inventory_with_clusters_flagged() {
+        let syl = crate::phonotactics::SyllableStructure {
+            onset_min: 0,
+            onset_max: 2,
+            coda_min: 0,
+            coda_max: 1,
+        };
+        let w = phonotactics_warnings(&syl, 5);
+        assert!(w.iter().any(|w| w.contains("repetitive")));
     }
 
     #[test]

@@ -130,6 +130,27 @@ ul.presets .ph {
   display: flex; gap: .1rem; background: var(--paper);
   padding: 0 .15rem; border-radius: 4px;
 }
+select {
+  font: inherit; padding: .4rem .5rem; border: 1px solid var(--line);
+  border-radius: 4px; background: var(--card); color: var(--ink);
+}
+form.builder {
+  display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;
+  margin: 1rem 0;
+}
+form.builder label {
+  display: flex; flex-direction: column; gap: .3rem;
+  font: 500 .72rem/1 ui-monospace, monospace; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--faded);
+}
+form.builder .nucleus {
+  font: 500 1.3rem/1 ui-monospace, monospace; color: var(--accent-ink);
+  padding: .3rem .2rem;
+}
+.syltemplate {
+  font: 500 1.5rem/1 ui-monospace, monospace; letter-spacing: .08em;
+  color: var(--accent-ink); margin: .3rem 0 .6rem;
+}
 "#;
 
 pub fn layout(title: &str, user: Option<&User>, body: Markup) -> Markup {

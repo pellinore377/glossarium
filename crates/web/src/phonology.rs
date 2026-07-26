@@ -19,6 +19,7 @@ use crate::{
     auth::{current_user, User},
     error::AppError,
     ipa_chart::{self, Cell, AESTHETICS, CONSONANT_ROWS, PLACES},
+    phonotactics::{self, SyllableStructure, STRESS_PATTERNS, SYLLABLE_PRESETS},
     routes::Language,
     state::AppState,
     typology, views,
@@ -36,6 +37,10 @@ pub struct Phonology {
     pub vowels: Vec<String>,
     #[serde(default)]
     pub diphthongs: Vec<String>,
+    #[serde(default)]
+    pub syllable: Option<SyllableStructure>,
+    #[serde(default)]
+    pub stress: Option<String>,
 }
 
 async fn owned_language_with_phonology(
@@ -562,10 +567,43 @@ pub async fn toggle_diphthong(
     Ok(diphthong_warnings_fragment(&phonology.diphthongs, &phonology.vowels).into_response())
 }
 
-// ---------- Phonotactics (stub until next pass) ----------
+// ---------- Phonotactics ----------
+
+/// The template + warnings block the HTMX builder swaps in place.
+fn tactics_fragment(syl: &SyllableStructure, consonant_count: usize) -> Markup {
+    let warnings = typology::phonotactics_warnings(syl, consonant_count);
+    html! {
+        div #tactics-out {
+            p.eyebrow { "Syllable template" }
+            p.syltemplate { (syl.template()) }
+            div.warnbox {
+                @if warnings.is_empty() {
+                    p.ok { "Nothing typologically alarming so far." }
+                } @else {
+                    @for w in &warnings {
+                        p.warn { (w) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn margin_select(name: &str, label: &str, value: u8) -> Markup {
+    html! {
+        label {
+            (label)
+            select name=(name) {
+                @for n in 0..=phonotactics::MAX_MARGIN {
+                    option value=(n) selected[n == value] { (n) }
+                }
+            }
+        }
+    }
+}
 
 /// GET /languages/{id}/phonology/phonotactics
-pub async fn phonotactics_stub(
+pub async fn phonotactics_page(
     State(state): State<AppState>,
     session: Session,
     Path(id): Path<i64>,
@@ -575,19 +613,220 @@ pub async fn phonotactics_stub(
         Err(landing) => return Ok(landing),
     };
     let (language, phonology) = owned_language_with_phonology(&state, &user, id).await?;
+    let syl = phonology.syllable.unwrap_or_default();
+
     let body = html! {
         p.eyebrow {
             a href={ "/languages/" (language.id) "/phonology/diphthongs" } class="muted" { "← Diphthongs" }
         }
         (wizard_steps("phonotactics"))
-        h1 { "Phonotactics" }
-        div.empty {
-            "Syllable structure presets and the onset/nucleus/coda builder "
-            "land in the next pass. Inventory so far: "
-            (phonology.consonants.len()) " consonants, "
-            (phonology.vowels.len()) " vowels, "
-            (phonology.diphthongs.len()) " diphthongs — all saved."
+        h1 { "Syllable structure" }
+        p {
+            "Every syllable is an onset, a nucleus, and a coda. The nucleus "
+            "is always exactly one vowel or diphthong; what you decide here "
+            "is how many consonants may crowd in on either side. This single "
+            "template shapes every word the lexicon generator will ever "
+            "build for " (language.name) "."
+        }
+        ul.presets {
+            @for p in SYLLABLE_PRESETS {
+                li {
+                    form method="post" action={ "/languages/" (language.id) "/phonology/phonotactics/preset" } {
+                        input type="hidden" name="preset" value=(p.id);
+                        button type="submit" { (p.name) }
+                        span.ph style="margin-left:.6rem" { (p.structure.template()) }
+                        @if syl == p.structure {
+                            span.muted { " · current" }
+                        }
+                    }
+                    p.muted style="margin:.45rem 0 0" { (p.blurb) }
+                }
+            }
+        }
+        h2 { "Or tune it by hand" }
+        form.builder
+            hx-post={ "/languages/" (language.id) "/phonology/phonotactics/set" }
+            hx-trigger="change"
+            hx-target="#tactics-out"
+            hx-swap="outerHTML"
+        {
+            (margin_select("onset_min", "Onset min", syl.onset_min))
+            (margin_select("onset_max", "Onset max", syl.onset_max))
+            span.nucleus { "V" }
+            (margin_select("coda_min", "Coda min", syl.coda_min))
+            (margin_select("coda_max", "Coda max", syl.coda_max))
+        }
+        (tactics_fragment(&syl, phonology.consonants.len()))
+        form.inline method="get" action={ "/languages/" (language.id) "/phonology/stress" } {
+            button type="submit" { "Continue to stress →" }
         }
     };
     Ok(views::layout("Phonotactics", Some(&user), body).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct ChooseSyllablePreset {
+    preset: String,
+}
+
+/// POST /languages/{id}/phonology/phonotactics/preset
+pub async fn choose_syllable_preset(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+    Form(form): Form<ChooseSyllablePreset>,
+) -> Result<Response, AppError> {
+    let user = match require_user(&state, &session).await? {
+        Ok(u) => u,
+        Err(landing) => return Ok(landing),
+    };
+    let (language, mut phonology) = owned_language_with_phonology(&state, &user, id).await?;
+
+    if let Some(p) = phonotactics::syllable_preset_by_id(&form.preset) {
+        phonology.syllable = Some(p.structure);
+        save_phonology(&state, language.id, &phonology).await?;
+    }
+    // PRG back to the same page: the builder re-renders with the preset's
+    // numbers, ready for hand-tuning.
+    Ok(Redirect::to(&format!(
+        "/languages/{}/phonology/phonotactics",
+        language.id
+    ))
+    .into_response())
+}
+
+/// POST /languages/{id}/phonology/phonotactics/set (HTMX)
+///
+/// Fires on any change to the builder selects; saves and returns the
+/// refreshed template + warnings fragment.
+pub async fn set_phonotactics(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+    Form(form): Form<SyllableStructure>,
+) -> Result<Response, AppError> {
+    let user = match require_user(&state, &session).await? {
+        Ok(u) => u,
+        Err(landing) => return Ok(landing),
+    };
+    let (language, mut phonology) = owned_language_with_phonology(&state, &user, id).await?;
+
+    let syl = form.normalized();
+    phonology.syllable = Some(syl);
+    save_phonology(&state, language.id, &phonology).await?;
+
+    Ok(tactics_fragment(&syl, phonology.consonants.len()).into_response())
+}
+
+// ---------- Stress ----------
+
+/// GET /languages/{id}/phonology/stress
+pub async fn stress_page(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+) -> Result<Response, AppError> {
+    let user = match require_user(&state, &session).await? {
+        Ok(u) => u,
+        Err(landing) => return Ok(landing),
+    };
+    let (language, phonology) = owned_language_with_phonology(&state, &user, id).await?;
+
+    let body = html! {
+        p.eyebrow {
+            a href={ "/languages/" (language.id) "/phonology/phonotactics" } class="muted" { "← Syllable structure" }
+        }
+        (wizard_steps("stress"))
+        h1 { "Stress" }
+        p {
+            "Where does the emphasis fall? A fixed stress rule does a lot of "
+            "quiet work: it gives every generated word the same rhythmic "
+            "signature, and later it gives sound changes a landmark — vowel "
+            "reduction and syncope hunt unstressed syllables."
+        }
+        ul.presets {
+            @for p in STRESS_PATTERNS {
+                li {
+                    form method="post" action={ "/languages/" (language.id) "/phonology/stress" } {
+                        input type="hidden" name="pattern" value=(p.id);
+                        button type="submit" { (p.name) }
+                        span.ph style="margin-left:.6rem" { "[" (p.example) "]" }
+                        @if phonology.stress.as_deref() == Some(p.id) {
+                            span.muted { " · current" }
+                        }
+                    }
+                    p.muted style="margin:.45rem 0 0" { (p.blurb) }
+                }
+            }
+        }
+    };
+    Ok(views::layout("Stress", Some(&user), body).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct ChooseStress {
+    pattern: String,
+}
+
+/// POST /languages/{id}/phonology/stress
+pub async fn choose_stress(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+    Form(form): Form<ChooseStress>,
+) -> Result<Response, AppError> {
+    let user = match require_user(&state, &session).await? {
+        Ok(u) => u,
+        Err(landing) => return Ok(landing),
+    };
+    let (language, mut phonology) = owned_language_with_phonology(&state, &user, id).await?;
+
+    if phonotactics::stress_by_id(&form.pattern).is_some() {
+        phonology.stress = Some(form.pattern);
+        save_phonology(&state, language.id, &phonology).await?;
+    }
+    Ok(Redirect::to(&format!(
+        "/languages/{}/phonology/romanization",
+        language.id
+    ))
+    .into_response())
+}
+
+// ---------- Romanization (stub until next pass) ----------
+
+/// GET /languages/{id}/phonology/romanization
+pub async fn romanization_stub(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+) -> Result<Response, AppError> {
+    let user = match require_user(&state, &session).await? {
+        Ok(u) => u,
+        Err(landing) => return Ok(landing),
+    };
+    let (language, phonology) = owned_language_with_phonology(&state, &user, id).await?;
+    let syl = phonology.syllable.unwrap_or_default();
+    let body = html! {
+        p.eyebrow {
+            a href={ "/languages/" (language.id) "/phonology/stress" } class="muted" { "← Stress" }
+        }
+        (wizard_steps("romanization"))
+        h1 { "Romanization" }
+        div.empty {
+            "Auto-suggested phoneme→spelling mappings land in the next "
+            "pass. So far: " (phonology.consonants.len()) " consonants, "
+            (phonology.vowels.len()) " vowels, "
+            (phonology.diphthongs.len()) " diphthongs, syllables shaped "
+            (syl.template())
+            @if let Some(s) = phonology
+                .stress
+                .as_deref()
+                .and_then(phonotactics::stress_by_id)
+            {
+                ", " (s.name.to_lowercase()) " stress"
+            }
+            " — all saved."
+        }
+    };
+    Ok(views::layout("Romanization", Some(&user), body).into_response())
 }

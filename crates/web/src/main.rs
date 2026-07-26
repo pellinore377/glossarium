@@ -3,6 +3,7 @@ mod config;
 mod error;
 mod ipa_chart;
 mod phonology;
+mod phonotactics;
 mod routes;
 mod state;
 mod typology;
@@ -108,7 +109,23 @@ async fn main() -> Result<()> {
         )
         .route(
             "/languages/{id}/phonology/phonotactics",
-            get(phonology::phonotactics_stub),
+            get(phonology::phonotactics_page),
+        )
+        .route(
+            "/languages/{id}/phonology/phonotactics/preset",
+            post(phonology::choose_syllable_preset),
+        )
+        .route(
+            "/languages/{id}/phonology/phonotactics/set",
+            post(phonology::set_phonotactics),
+        )
+        .route(
+            "/languages/{id}/phonology/stress",
+            get(phonology::stress_page).post(phonology::choose_stress),
+        )
+        .route(
+            "/languages/{id}/phonology/romanization",
+            get(phonology::romanization_stub),
         )
         .layer(session_layer)
         .layer(TraceLayer::new_for_http())
