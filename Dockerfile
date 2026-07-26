@@ -20,6 +20,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 RUN useradd --system --create-home appuser
+RUN mkdir -p /data && chown appuser:appuser /data
 USER appuser
 WORKDIR /home/appuser
 COPY --from=builder /app/target/release/web /usr/local/bin/glossarium
