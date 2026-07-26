@@ -23,7 +23,7 @@ pub enum Pos {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Concept {
     /// Concepticon concept-set ID where one exists; local IDs otherwise.
-    pub concept_id: String,
+    pub concept_id: &'static str,
     pub gloss: &'static str,
     pub pos: Pos,
 }
