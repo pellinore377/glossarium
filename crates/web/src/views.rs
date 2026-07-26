@@ -203,6 +203,13 @@ button.mini {
 }
 form.rowedit { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; }
 form.rowedit input[type=text] { min-width: 0; flex: 1 1 8rem; }
+ol.chain { margin: 1rem 0; padding-left: 1.6rem; }
+ol.chain li {
+  background: var(--card); border: 1px solid var(--line); border-radius: 6px;
+  padding: .5rem .8rem; margin: .4rem 0;
+  display: flex; align-items: center; justify-content: space-between; gap: .6rem;
+}
+ol.chain li::marker { color: var(--accent-ink); font-family: ui-monospace, monospace; }
 "#;
 
 pub fn layout(title: &str, user: Option<&User>, body: Markup) -> Markup {
@@ -330,6 +337,7 @@ pub fn language_page(
     project: &Project,
     language: &Language,
     lexeme_count: i64,
+    change_count: i64,
 ) -> Markup {
     layout(
         &language.name,
@@ -341,22 +349,37 @@ pub fn language_page(
             h1 { (language.name) }
             @if language.parent_id.is_none() {
                 p.muted { "Proto-language of this family." }
-            }
-            form.inline method="get" action={ "/languages/" (language.id) "/phonology" } {
-                button type="submit" { "Design the phonology →" }
-            }
-            form.inline method="get" action={ "/languages/" (language.id) "/lexicon" } {
-                button type="submit" {
-                    @if lexeme_count > 0 {
-                        "Open the lexicon (" (lexeme_count) " entries) →"
-                    } @else {
-                        "Seed the lexicon →"
+                form.inline method="get" action={ "/languages/" (language.id) "/phonology" } {
+                    button type="submit" { "Design the phonology →" }
+                }
+                form.inline method="get" action={ "/languages/" (language.id) "/lexicon" } {
+                    button type="submit" {
+                        @if lexeme_count > 0 {
+                            "Open the lexicon (" (lexeme_count) " entries) →"
+                        } @else {
+                            "Seed the lexicon →"
+                        }
                     }
                 }
+            } @else {
+                form.inline method="get" action={ "/languages/" (language.id) "/changes" } {
+                    button type="submit" {
+                        "Sound changes (" (change_count) ") →"
+                    }
+                }
+                form.inline method="get" action={ "/languages/" (language.id) "/lexicon" } {
+                    button type="submit" { "View the derived lexicon →" }
+                }
             }
-            div.empty {
-                "The evolve menu — daughter languages through documented "
-                "sound changes — lands in the next milestone."
+            h2 { "Evolve" }
+            p.muted style="font-size:.9rem" {
+                "A daughter starts as a perfect copy and drifts one sound "
+                "change at a time. Daughters can have daughters — that's "
+                "how a family tree grows."
+            }
+            form.inline method="post" action={ "/languages/" (language.id) "/evolve" } {
+                input type="text" name="name" placeholder="Daughter language name" required;
+                button type="submit" { "Evolve a daughter →" }
             }
         },
     )

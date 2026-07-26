@@ -8,6 +8,8 @@
 //! Rust source — each catalog entry carries an [`Applicability`] predicate so
 //! the UI can offer only changes that make sense for the language at hand.
 
+pub mod catalog;
+
 use phon::{Feature, FeatureValue, Segment, Word};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -163,6 +165,38 @@ pub fn apply_rule(rule: &Rule, word: &Word) -> Word {
     }
 
     Word { segments: out }
+}
+
+/// Resolve every rule-mutated segment (marked `~` by [`apply_rule`]) back
+/// to a real glyph: exact feature match against the universal table
+/// first, nearest-neighbour for chart gaps, and if even that fails the
+/// marker is stripped and the old glyph kept (the change was vacuous at
+/// the surface).
+pub fn rerender(word: &mut Word) {
+    for seg in &mut word.segments {
+        if seg.ipa.starts_with('~') {
+            match phon::resolve(&seg.features).or_else(|| phon::resolve_nearest(&seg.features)) {
+                Some(u) => *seg = u.clone(),
+                None => seg.ipa = seg.ipa.trim_start_matches('~').to_string(),
+            }
+        }
+    }
+}
+
+/// Parse → apply chain → re-render. `None` when the form contains
+/// symbols outside the universal table (hand-typed exotica); callers
+/// display the original untouched in that case.
+pub fn derive_word(form_ipa: &str, rules: &[Rule]) -> Option<Word> {
+    let mut w = phon::parse_universal(form_ipa).ok()?;
+    for rule in rules {
+        w = apply_rule(rule, &w);
+    }
+    rerender(&mut w);
+    Some(w)
+}
+
+pub fn derive_ipa(form_ipa: &str, rules: &[Rule]) -> Option<String> {
+    derive_word(form_ipa, rules).map(|w| w.ipa())
 }
 
 #[cfg(test)]

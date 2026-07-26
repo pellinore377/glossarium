@@ -1,6 +1,7 @@
 mod auth;
 mod config;
 mod error;
+mod evolve;
 mod ipa_chart;
 mod lexicon;
 mod phonology;
@@ -150,6 +151,17 @@ async fn main() -> Result<()> {
         .route("/lexemes/{id}/edit", get(lexicon::lexeme_edit_row))
         .route("/lexemes/{id}/row", get(lexicon::lexeme_display_row))
         .route("/lexemes/{id}/delete", post(lexicon::delete_lexeme))
+        .route("/languages/{id}/evolve", post(evolve::create_daughter))
+        .route("/languages/{id}/changes", get(evolve::changes_page))
+        .route("/languages/{id}/changes/add", post(evolve::add_change))
+        .route(
+            "/languages/{id}/changes/preview/{entry}",
+            get(evolve::preview_change),
+        )
+        .route(
+            "/languages/{id}/changes/{cid}/delete",
+            post(evolve::delete_change),
+        )
         .layer(session_layer)
         .layer(TraceLayer::new_for_http())
         .with_state(state);

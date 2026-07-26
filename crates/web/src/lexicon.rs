@@ -184,6 +184,12 @@ pub async fn lexicon_page(
         Err(landing) => return Ok(landing),
     };
     let (language, phonology) = owned_language_with_phonology(&state, &user, id).await?;
+
+    // Daughters own no lexemes: their dictionary is the proto-lexicon
+    // pushed through every sound change between there and here.
+    if language.parent_id.is_some() {
+        return derived_lexicon_page(&state, &user, &language, &phonology).await;
+    }
     let count = lexeme_count(&state, language.id).await?;
 
     let body = if count == 0 {
@@ -258,6 +264,76 @@ pub async fn lexicon_page(
     Ok(views::layout("Lexicon", Some(&user), body).into_response())
 }
 
+/// The read-only derived dictionary for a daughter language.
+async fn derived_lexicon_page(
+    state: &AppState,
+    user: &crate::auth::User,
+    language: &crate::routes::Language,
+    phonology: &Phonology,
+) -> Result<Response, AppError> {
+    let (proto, chain) = crate::evolve::proto_and_chain(state, user.id, language).await?;
+    let lexemes = crate::evolve::proto_lexemes(state, proto.id).await?;
+    let derived: Vec<(&LexemeRow, String)> = lexemes
+        .iter()
+        .map(|l| {
+            let d = sca::derive_ipa(&l.form_ipa, &chain).unwrap_or_else(|| l.form_ipa.clone());
+            (l, d)
+        })
+        .collect();
+    let changed = derived.iter().filter(|(l, d)| l.form_ipa != *d).count();
+
+    let body = html! {
+        p.eyebrow { a href={ "/languages/" (language.id) } class="muted" { "← " (language.name) } }
+        h1 { (language.name) ": derived lexicon" }
+        @if lexemes.is_empty() {
+            div.empty {
+                "The proto-language " (proto.name) " has no lexicon yet — "
+                "seed it there, and every daughter inherits instantly."
+            }
+        } @else {
+            p.eyebrow {
+                (changed) " of " (lexemes.len()) " forms differ from " (proto.name)
+            }
+            p.muted style="font-size:.9rem" {
+                "Nothing here is stored. Each form is " (proto.name) "'s "
+                "root run through the chain — change the chain (or the "
+                "proto's lexicon) and this page follows."
+            }
+            div.chart-scroll {
+                table.lex {
+                    thead {
+                        tr {
+                            th { "gloss" } th { (proto.name) } th { (language.name) }
+                            th { "romanized" } th { "pos" }
+                        }
+                    }
+                    tbody {
+                        @for (l, d) in &derived {
+                            tr {
+                                td.gloss { (l.gloss) }
+                                td.ph.muted { "/" (l.form_ipa) "/" }
+                                td.ph {
+                                    @if l.form_ipa == *d {
+                                        span.muted { "/" (d) "/" }
+                                    } @else {
+                                        strong { "/" (d) "/" }
+                                    }
+                                }
+                                td.ph { "⟨" (romanization::romanize(d, &phonology.romanization)) "⟩" }
+                                td.muted { (Pos::parse(&l.pos).map(Pos::abbrev).unwrap_or("?")) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        form.inline method="get" action={ "/languages/" (language.id) "/changes" } {
+            button type="submit" { "Edit the sound changes →" }
+        }
+    };
+    Ok(views::layout("Derived lexicon", Some(user), body).into_response())
+}
+
 /// POST /languages/{id}/lexicon/seed
 pub async fn seed_lexicon(
     State(state): State<AppState>,
@@ -270,8 +346,8 @@ pub async fn seed_lexicon(
     };
     let (language, phonology) = owned_language_with_phonology(&state, &user, id).await?;
 
-    // Guard against the double-submit: seeding is only for an empty lexicon.
-    if lexeme_count(&state, language.id).await? == 0 {
+    // Seeding is for protos with an empty lexicon only; daughters derive.
+    if language.parent_id.is_none() && lexeme_count(&state, language.id).await? == 0 {
         if let Ok(mut generator) = Generator::new(word_spec(&phonology, language.id)) {
             let mut tx = state.db.begin().await?;
             for concept in lex::seed_concepts() {
@@ -342,7 +418,7 @@ pub async fn create_lexeme(
     let gloss = form.gloss.trim();
     let form_ipa = form.form_ipa.trim();
     let pos = Pos::parse(&form.pos).unwrap_or(Pos::Noun);
-    if !gloss.is_empty() && !form_ipa.is_empty() {
+    if !gloss.is_empty() && !form_ipa.is_empty() && language.parent_id.is_none() {
         sqlx::query(
             "INSERT INTO lexemes (language_id, form_ipa, gloss, pos, notes)
              VALUES (?, ?, ?, ?, ?)",

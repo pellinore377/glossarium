@@ -179,7 +179,15 @@ pub async fn show_language(
             .bind(language.id)
             .fetch_one(&state.db)
             .await?;
-    Ok(views::language_page(&user, &project, &language, lexeme_count).into_response())
+    let (change_count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM sound_changes WHERE language_id = ?")
+            .bind(language.id)
+            .fetch_one(&state.db)
+            .await?;
+    Ok(
+        views::language_page(&user, &project, &language, lexeme_count, change_count)
+            .into_response(),
+    )
 }
 
 /// Convenience so views can be returned directly from small handlers later.

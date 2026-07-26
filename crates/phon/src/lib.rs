@@ -7,6 +7,11 @@
 //! ("this language has back vowels and a following /i/ or /j/, so i-umlaut
 //! is on the menu") possible at all.
 
+pub mod data;
+pub use data::{
+    effective_eq, parse_universal, resolve, resolve_nearest, universal_inventory,
+};
+
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -51,6 +56,33 @@ pub enum Feature {
     Round,
     Tense,
     Long,
+}
+
+impl Feature {
+    /// Every feature, for effective-equality sweeps in resolution.
+    pub const ALL: [Feature; 21] = [
+        Feature::Consonantal,
+        Feature::Sonorant,
+        Feature::Syllabic,
+        Feature::Voice,
+        Feature::SpreadGlottis,
+        Feature::ConstrictedGlottis,
+        Feature::Continuant,
+        Feature::Nasal,
+        Feature::Lateral,
+        Feature::DelayedRelease,
+        Feature::Labial,
+        Feature::Coronal,
+        Feature::Anterior,
+        Feature::Distributed,
+        Feature::Dorsal,
+        Feature::High,
+        Feature::Low,
+        Feature::Back,
+        Feature::Round,
+        Feature::Tense,
+        Feature::Long,
+    ];
 }
 
 /// A single segment: its canonical IPA rendering plus its feature bundle.
