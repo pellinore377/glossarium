@@ -66,6 +66,57 @@ button.quiet { background: transparent; color: var(--accent-ink); border-color: 
   border: 1px dashed var(--line); border-radius: 6px; padding: 1.4rem;
   color: var(--faded); margin-top: 1rem;
 }
+main:has(.chart-scroll) { max-width: 68rem; }
+.chart-scroll {
+  overflow-x: auto; margin: 1.25rem 0; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--card);
+}
+table.ipa { border-collapse: collapse; min-width: 58rem; width: 100%; }
+table.ipa th, table.ipa td {
+  border: 1px solid var(--line); padding: .25rem .3rem;
+  text-align: center; vertical-align: middle;
+}
+table.ipa thead th {
+  font: 500 .72rem/1.3 ui-monospace, monospace; letter-spacing: .03em;
+}
+table.ipa th.manner {
+  text-align: left; font-size: .78rem; font-weight: 500;
+  white-space: nowrap; padding: .25rem .6rem;
+}
+td.x {
+  background: repeating-linear-gradient(45deg,
+    transparent, transparent 4px, var(--line) 4px, var(--line) 6px);
+}
+button.sym {
+  font: 500 1.1rem/1 "Gentium Plus", "Charis SIL", Gentium,
+    "Times New Roman", serif;
+  min-width: 2rem; padding: .4rem .35rem; margin: .05rem;
+  border: 1px solid transparent; border-radius: 4px;
+  background: transparent; color: var(--ink); cursor: pointer;
+}
+button.sym:hover { border-color: var(--accent); }
+button.sym.on { background: var(--accent); color: var(--paper); font-weight: 700; }
+.warnbox { margin-top: 1.25rem; }
+p.warn {
+  border-left: 3px solid #b58a3c; border-radius: 0;
+  padding: .4rem .7rem; background: var(--card);
+  margin: .4rem 0; font-size: .95rem;
+}
+p.ok { color: var(--faded); font-size: .95rem; }
+ul.presets { list-style: none; padding: 0; margin: 1.25rem 0; display: grid; gap: .7rem; }
+ul.presets li {
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: 6px; padding: 1rem 1.1rem;
+}
+ul.presets .ph {
+  font-family: "Gentium Plus", "Times New Roman", serif;
+  color: var(--accent-ink); font-size: 1.05rem; margin: 0;
+}
+.wizsteps {
+  font: 400 .78rem/1.4 ui-monospace, monospace; letter-spacing: .04em;
+  color: var(--faded); margin: 0 0 .5rem;
+}
+.wizsteps strong { color: var(--accent-ink); font-weight: 500; }
 "#;
 
 pub fn layout(title: &str, user: Option<&User>, body: Markup) -> Markup {
@@ -200,10 +251,12 @@ pub fn language_page(user: &User, project: &Project, language: &Language) -> Mar
             @if language.parent_id.is_none() {
                 p.muted { "Proto-language of this family." }
             }
+            form.inline method="get" action={ "/languages/" (language.id) "/phonology" } {
+                button type="submit" { "Design the phonology →" }
+            }
             div.empty {
-                "Phonology wizard, lexicon, and the evolve menu land here in "
-                "the coming milestones. The schema underneath is already "
-                "shaped for them."
+                "Lexicon and the evolve menu land here in later milestones. "
+                "The schema underneath is already shaped for them."
             }
         },
     )

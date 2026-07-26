@@ -1,8 +1,11 @@
 mod auth;
 mod config;
 mod error;
+mod ipa_chart;
+mod phonology;
 mod routes;
 mod state;
+mod typology;
 mod views;
 
 use anyhow::{Context, Result};
@@ -74,6 +77,23 @@ async fn main() -> Result<()> {
         .route("/projects/{id}", get(routes::show_project))
         .route("/projects/{id}/languages", post(routes::create_language))
         .route("/languages/{id}", get(routes::show_language))
+        .route("/languages/{id}/phonology", get(phonology::aesthetic_page))
+        .route(
+            "/languages/{id}/phonology/aesthetic",
+            post(phonology::choose_aesthetic),
+        )
+        .route(
+            "/languages/{id}/phonology/consonants",
+            get(phonology::consonants_page),
+        )
+        .route(
+            "/languages/{id}/phonology/consonants/toggle",
+            post(phonology::toggle_consonant),
+        )
+        .route(
+            "/languages/{id}/phonology/vowels",
+            get(phonology::vowels_stub),
+        )
         .layer(session_layer)
         .layer(TraceLayer::new_for_http())
         .with_state(state);
