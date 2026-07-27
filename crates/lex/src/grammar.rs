@@ -520,10 +520,10 @@ pub fn generate(spec: WordSpec, force_morph: Option<MorphType>) -> Result<Gramma
     };
 
     // ---- Nouns ----
-    let number = match g.pick_index(&by!(&[25, 70, 5], &[5, 70, 25], &[5, 85, 10])) {
+    let number = match g.pick_index(by!(&[25, 70, 5], &[5, 70, 25], &[5, 85, 10])) {
         0 => NumberSystem::NoMarking,
         n => {
-            let strategy = match g.pick_index(&by!(
+            let strategy = match g.pick_index(by!(
                 &[15, 5, 55, 25],
                 &[75, 15, 5, 5],
                 &[80, 15, 5, 0]
@@ -541,7 +541,7 @@ pub fn generate(spec: WordSpec, force_morph: Option<MorphType>) -> Result<Gramma
             }
         }
     };
-    let alignment = match g.pick_index(&by!(&[70, 25, 5], &[25, 45, 30], &[15, 60, 25])) {
+    let alignment = match g.pick_index(by!(&[70, 25, 5], &[25, 45, 30], &[15, 60, 25])) {
         0 => Alignment::Neutral,
         1 => Alignment::NomAcc,
         _ => Alignment::ErgAbs,
@@ -563,11 +563,11 @@ pub fn generate(spec: WordSpec, force_morph: Option<MorphType>) -> Result<Gramma
         _ => GenderSystem::MascFem,
     };
     let definite_article =
-        (g.pick_index(&by!(&[35, 65], &[30, 70], &[45, 55])) == 0).then(|| g.short_word());
+        (g.pick_index(by!(&[35, 65], &[30, 70], &[45, 55])) == 0).then(|| g.short_word());
     let indefinite_article = (g.pick_index(&[20, 80]) == 0).then(|| g.short_word());
 
     // ---- Pronouns ----
-    let pronoun_case = g.pick_index(&by!(&[25, 75], &[50, 50], &[75, 25])) == 0;
+    let pronoun_case = g.pick_index(by!(&[25, 75], &[50, 50], &[75, 25])) == 0;
     let case_suffix = g.short_word();
     let gen_prefix = g.short_word();
     let plural_bit = g.short_word();
@@ -584,13 +584,13 @@ pub fn generate(spec: WordSpec, force_morph: Option<MorphType>) -> Result<Gramma
     }
 
     // ---- Verbs ----
-    let agreement = (g.pick_index(&by!(&[5, 95], &[45, 55], &[60, 40])) == 0).then(|| {
+    let agreement = (g.pick_index(by!(&[5, 95], &[45, 55], &[60, 40])) == 0).then(|| {
         AGREEMENT_LABELS
             .iter()
             .map(|l| (l.to_string(), g.short_word()))
             .collect::<Vec<_>>()
     });
-    let tense = match g.pick_index(&by!(&[25, 45, 30], &[10, 35, 55], &[5, 30, 65])) {
+    let tense = match g.pick_index(by!(&[25, 45, 30], &[10, 35, 55], &[5, 30, 65])) {
         0 => TenseSystem::Tenseless { perfective: g.short_word() },
         1 => TenseSystem::PastNonpast { past: g.short_word() },
         _ => TenseSystem::ThreeWay { past: g.short_word(), future: g.short_word() },
@@ -599,7 +599,7 @@ pub fn generate(spec: WordSpec, force_morph: Option<MorphType>) -> Result<Gramma
     let continuous = (g.pick_index(&[50, 50]) == 0).then(|| g.short_word());
     let perfect_aux = (g.pick_index(&[45, 55]) == 0).then(|| g.short_word());
     let copula = (g.pick_index(&[55, 45]) == 0).then(|| g.short_word());
-    let negation = match g.pick_index(&by!(
+    let negation = match g.pick_index(by!(
         &[70, 5, 5, 20],
         &[35, 25, 25, 15],
         &[45, 25, 20, 10]
@@ -621,7 +621,7 @@ pub fn generate(spec: WordSpec, force_morph: Option<MorphType>) -> Result<Gramma
         (g.pick_index(&[20, 80]) == 0).then(|| (g.short_word(), g.short_word()));
 
     // ---- Word-building ----
-    let modality = match g.pick_index(&by!(
+    let modality = match g.pick_index(by!(
         &[5, 5, 45, 45],
         &[30, 30, 25, 15],
         &[25, 20, 45, 10]
@@ -640,7 +640,7 @@ pub fn generate(spec: WordSpec, force_morph: Option<MorphType>) -> Result<Gramma
         1 => Comparative::Suffix { suffix: g.short_word(), than: g.short_word() },
         _ => Comparative::ExceedVerb { verb: g.short_word() },
     };
-    let converbs = (g.pick_index(&by!(&[25, 75], &[50, 50], &[30, 70])) == 0).then(|| {
+    let converbs = (g.pick_index(by!(&[25, 75], &[50, 50], &[30, 70])) == 0).then(|| {
         CONVERB_MEANINGS
             .iter()
             .map(|m| (m.to_string(), g.short_word()))
