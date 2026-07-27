@@ -244,6 +244,8 @@ label.radio input.ph[type=text] {
   flex-wrap: wrap;
 }
 .gramrow input.ph[type=text] { min-width: 7rem; width: 10rem; }
+span.rr { display: inline-flex; align-items: center; gap: .2rem; }
+span.rr button.mini { padding: .2rem .4rem; }
 input.ph[type=text] {
   font: 500 1.02rem/1.3 "Gentium Plus", "Charis SIL", Gentium,
     "Times New Roman", serif;
@@ -271,6 +273,41 @@ ol.chain li {
 ol.chain li::marker { color: var(--accent-ink); font-family: ui-monospace, monospace; }
 "#;
 
+/// `data-show="name=value|value2"` on any element hides it unless the
+/// named form control (radio group, checkbox, or select) in the same
+/// form currently holds one of the values; checkboxes read as on/off.
+/// `reroll(btn)` fills the input just before the button with a freshly
+/// generated form from the language's own phonology.
+const UI_SCRIPT: &str = r#"
+function syncVis(){
+  document.querySelectorAll('[data-show]').forEach(function(el){
+    var spec = el.getAttribute('data-show').split('=');
+    var name = spec[0], vals = spec[1].split('|');
+    var form = el.closest('form'); if (!form) return;
+    var inputs = form.querySelectorAll('[name="' + name + '"]');
+    if (!inputs.length) return;
+    var v = '';
+    var first = inputs[0];
+    if (first.type === 'checkbox') { v = first.checked ? 'on' : 'off'; }
+    else if (first.type === 'radio') {
+      var c = form.querySelector('[name="' + name + '"]:checked');
+      v = c ? c.value : '';
+    } else { v = first.value; }
+    el.style.display = vals.indexOf(v) >= 0 ? '' : 'none';
+  });
+}
+document.addEventListener('change', syncVis);
+document.addEventListener('DOMContentLoaded', function(){
+  syncVis();
+  document.body.addEventListener('htmx:afterSwap', syncVis);
+});
+async function reroll(btn){
+  var inp = btn.previousElementSibling;
+  var r = await fetch(btn.getAttribute('data-reroll'));
+  if (r.ok) { inp.value = await r.text(); }
+}
+"#;
+
 pub fn layout(title: &str, user: Option<&User>, body: Markup) -> Markup {
     html! {
         (DOCTYPE)
@@ -282,6 +319,8 @@ pub fn layout(title: &str, user: Option<&User>, body: Markup) -> Markup {
                 style { (maud::PreEscaped(STYLE)) }
                 // Vendor this file for fully-offline use: see README §Static assets.
                 script src="https://unpkg.com/htmx.org@2.0.4" {}
+                // Dependent-field visibility + suggestion rerolls.
+                script { (maud::PreEscaped(UI_SCRIPT)) }
             }
             body {
                 header.site {

@@ -91,6 +91,11 @@ fn display_row(l: &LexemeRow, rom: &BTreeMap<String, String>) -> Markup {
             td.muted { (abbrev) }
             td.muted.notes { (l.notes) }
             td.actions {
+                button.mini.quiet title="generate a different word"
+                    hx-post={ "/lexemes/" (l.id) "/reroll" }
+                    hx-target={ "#lex-" (l.id) }
+                    hx-swap="outerHTML"
+                { "↻" }
                 button.mini.quiet
                     hx-get={ "/lexemes/" (l.id) "/edit" }
                     hx-target={ "#lex-" (l.id) }
@@ -550,6 +555,62 @@ pub async fn update_lexeme(
         lexeme.notes = form.notes.trim().to_string();
     }
     Ok(display_row(&lexeme, &rom).into_response())
+}
+
+/// POST /lexemes/{id}/reroll — replace this entry's form with a freshly
+/// generated word (unique against the rest of the lexicon), same
+/// phonology. Non-deterministic on purpose: the user is rolling dice.
+pub async fn reroll_lexeme(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+) -> Result<Response, AppError> {
+    let user = match require_user(&state, &session).await? {
+        Ok(u) => u,
+        Err(landing) => return Ok(landing),
+    };
+    let (mut lexeme, _) = owned_lexeme(&state, user.id, id).await?;
+
+    // The owning language's id and phonology, for the generator spec.
+    let (language_id, phon_json): (i64, String) = sqlx::query_as(
+        "SELECT l.id, l.phonology FROM lexemes x
+         JOIN languages l ON l.id = x.language_id
+         WHERE x.id = ?",
+    )
+    .bind(lexeme.id)
+    .fetch_one(&state.db)
+    .await?;
+    let phonology: Phonology = serde_json::from_str(&phon_json).unwrap_or_default();
+
+    let taken: std::collections::HashSet<String> =
+        sqlx::query_as::<_, (String,)>("SELECT form_ipa FROM lexemes WHERE language_id = ?")
+            .bind(language_id)
+            .fetch_all(&state.db)
+            .await?
+            .into_iter()
+            .map(|(f,)| f)
+            .collect();
+
+    let mut spec = word_spec(&phonology, language_id);
+    spec.seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0xD1CE);
+    if let Ok(mut generator) = Generator::new(spec) {
+        for _ in 0..100 {
+            let w = generator.word();
+            if !taken.contains(&w) {
+                sqlx::query("UPDATE lexemes SET form_ipa = ? WHERE id = ?")
+                    .bind(&w)
+                    .bind(lexeme.id)
+                    .execute(&state.db)
+                    .await?;
+                lexeme.form_ipa = w;
+                break;
+            }
+        }
+    }
+    Ok(display_row(&lexeme, &phonology.romanization).into_response())
 }
 
 /// POST /lexemes/{id}/delete — remove the row from the table.

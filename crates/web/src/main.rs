@@ -90,21 +90,46 @@ async fn main() -> Result<()> {
         .route("/languages/{id}/tab/grammar", get(grammar::tab_grammar))
         .route("/languages/{id}/tab/stories", get(grammar::tab_stories))
         .route("/languages/{id}/grammar", get(grammar::wizard_entry))
+        .route("/languages/{id}/grammar/reroll", get(grammar::reroll_form))
         .route(
             "/languages/{id}/grammar/profile",
             get(grammar::profile_page).post(grammar::save_profile),
         )
         .route(
-            "/languages/{id}/grammar/nouns",
-            get(grammar::nouns_page).post(grammar::save_nouns),
+            "/languages/{id}/grammar/clauses",
+            get(grammar::clauses_page).post(grammar::save_clauses),
+        )
+        .route(
+            "/languages/{id}/grammar/number",
+            get(grammar::number_page).post(grammar::save_number),
+        )
+        .route(
+            "/languages/{id}/grammar/case",
+            get(grammar::case_page).post(grammar::save_case),
+        )
+        .route(
+            "/languages/{id}/grammar/gender",
+            get(grammar::gender_page).post(grammar::save_gender),
+        )
+        .route(
+            "/languages/{id}/grammar/pronouns",
+            get(grammar::pronouns_page).post(grammar::save_pronouns),
+        )
+        .route(
+            "/languages/{id}/grammar/tense",
+            get(grammar::tense_page).post(grammar::save_tense),
         )
         .route(
             "/languages/{id}/grammar/verbs",
             get(grammar::verbs_page).post(grammar::save_verbs),
         )
         .route(
-            "/languages/{id}/grammar/word-building",
-            get(grammar::wordbuilding_page).post(grammar::save_wordbuilding),
+            "/languages/{id}/grammar/modality",
+            get(grammar::modality_page).post(grammar::save_modality),
+        )
+        .route(
+            "/languages/{id}/grammar/derivation",
+            get(grammar::derivation_page).post(grammar::save_derivation),
         )
         .route(
             "/languages/{id}/grammar/summary",
@@ -192,6 +217,7 @@ async fn main() -> Result<()> {
         .route("/lexemes/{id}/edit", get(lexicon::lexeme_edit_row))
         .route("/lexemes/{id}/row", get(lexicon::lexeme_display_row))
         .route("/lexemes/{id}/delete", post(lexicon::delete_lexeme))
+        .route("/lexemes/{id}/reroll", post(lexicon::reroll_lexeme))
         .route("/languages/{id}/evolve", post(evolve::create_daughter))
         .route("/languages/{id}/changes", get(evolve::changes_page))
         .route("/languages/{id}/changes/add", post(evolve::add_change))

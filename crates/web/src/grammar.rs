@@ -87,11 +87,15 @@ fn derive(form: &str, chain: &[Rule]) -> String {
 
 // ---------- Wizard scaffolding ----------
 
+const WIZARD_STEPS: &[&str] = &[
+    "profile", "clauses", "number", "case", "gender", "pronouns",
+    "tense", "verbs", "modality", "derivation", "summary",
+];
+
 fn gsteps(language_id: i64, current: &str) -> Markup {
-    let steps = ["profile", "nouns", "verbs", "word-building", "summary"];
     html! {
         p.wizsteps {
-            @for (i, s) in steps.iter().enumerate() {
+            @for (i, s) in WIZARD_STEPS.iter().enumerate() {
                 @if i > 0 { " → " }
                 @if *s == current {
                     strong { (s) }
@@ -101,6 +105,22 @@ fn gsteps(language_id: i64, current: &str) -> Markup {
             }
         }
     }
+}
+
+fn next_step(current: &str) -> &'static str {
+    WIZARD_STEPS
+        .iter()
+        .skip_while(|s| **s != current)
+        .nth(1)
+        .unwrap_or(&"summary")
+}
+
+fn prev_step(current: &str) -> Option<&'static str> {
+    WIZARD_STEPS
+        .iter()
+        .take_while(|s| **s != current)
+        .last()
+        .copied()
 }
 
 macro_rules! wizard_gate {
@@ -117,6 +137,41 @@ macro_rules! wizard_gate {
     }};
 }
 
+/// One wizard page shell: back link, breadcrumb, heading, form wrapping
+/// the given fields, continue button posting to this same step.
+fn wizard_page(
+    user: &crate::auth::User,
+    language: &Language,
+    step: &str,
+    title: &str,
+    intro: Option<&str>,
+    fields: Markup,
+) -> Response {
+    let back = prev_step(step);
+    let body = html! {
+        p.eyebrow {
+            @match back {
+                Some(b) => {
+                    a href={ "/languages/" (language.id) "/grammar/" (b) } class="muted" { "← " (b) }
+                }
+                None => {
+                    a href={ "/languages/" (language.id) } class="muted" { "← " (language.name) }
+                }
+            }
+        }
+        (gsteps(language.id, step))
+        h1 { (title) }
+        @if let Some(i) = intro { p { (i) } }
+        form method="post" action={ "/languages/" (language.id) "/grammar/" (step) } {
+            (fields)
+            button type="submit" style="margin-top:1.5rem" {
+                "Save — " (next_step(step)) " →"
+            }
+        }
+    };
+    views::layout(title, Some(user), body).into_response()
+}
+
 /// GET /languages/{id}/grammar
 pub async fn wizard_entry(
     State(state): State<AppState>,
@@ -125,6 +180,30 @@ pub async fn wizard_entry(
 ) -> Result<Response, AppError> {
     let (_user, language, _phonology) = wizard_gate!(&state, &session, id);
     Ok(Redirect::to(&format!("/languages/{}/grammar/profile", language.id)).into_response())
+}
+
+/// GET /languages/{id}/grammar/reroll — one fresh short form, plain
+/// text, for the ↻ buttons. Deliberately non-deterministic: it's a
+/// suggestion the user asked for, saved only if they keep it.
+pub async fn reroll_form(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+) -> Result<Response, AppError> {
+    let user = match require_user(&state, &session).await? {
+        Ok(u) => u,
+        Err(landing) => return Ok(landing),
+    };
+    let (language, phonology) = owned_language_with_phonology(&state, &user, id).await?;
+    let mut spec = crate::lexicon::word_spec(&phonology, language.id);
+    spec.seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0xDECAF);
+    match lex::gen::Generator::new(spec) {
+        Ok(mut g) => Ok(g.short_word().into_response()),
+        Err(_) => Ok(String::new().into_response()),
+    }
 }
 
 // Small form helpers.
@@ -142,11 +221,25 @@ fn opt_of(f: &FormMap, on_key: &str, form_key: &str) -> Option<String> {
         .then(|| val(f, form_key).to_string())
 }
 
-fn text_in(name: &str, value: &str) -> Markup {
-    html! { input.ph type="text" name=(name) value=(value); }
+/// Text input with a ↻ suggestion button.
+fn text_r(language_id: i64, name: &str, value: &str) -> Markup {
+    html! {
+        span.rr {
+            input.ph type="text" name=(name) value=(value);
+            button.mini.quiet type="button" title="suggest a form"
+                data-reroll={ "/languages/" (language_id) "/grammar/reroll" }
+                onclick="reroll(this)"
+            { "↻" }
+        }
+    }
 }
 
-// ---------- Step 1: profile & clauses ----------
+fn save_redirect(language_id: i64, step: &str) -> Response {
+    Redirect::to(&format!("/languages/{language_id}/grammar/{}", next_step(step)))
+        .into_response()
+}
+
+// ---------- Step 1: profile ----------
 
 /// GET /languages/{id}/grammar/profile
 pub async fn profile_page(
@@ -156,19 +249,13 @@ pub async fn profile_page(
 ) -> Result<Response, AppError> {
     let (user, language, phonology) = wizard_gate!(&state, &session, id);
     let g = ensure_grammar(&state, &language, &phonology).await?;
-
-    let body = html! {
-        p.eyebrow { a href={ "/languages/" (language.id) } class="muted" { "← " (language.name) } }
-        (gsteps(language.id, "profile"))
-        h1 { "Grammatical profile" }
-        p {
-            "First the temperament, then the skeleton. Everything below "
-            "was drafted from " (language.name) "'s seed — change "
-            "anything; changing the temperament re-drafts the later pages "
-            "to match it."
-        }
-        form method="post" action={ "/languages/" (language.id) "/grammar/profile" } {
-            h2 { "Morphological type" }
+    Ok(wizard_page(
+        &user, &language, "profile", "Morphological profile",
+        Some(
+            "One choice, big consequences: how much work do individual \
+             words do? Changing this re-drafts every later page to match.",
+        ),
+        html! {
             @for m in MorphType::ALL {
                 label.radio {
                     input type="radio" name="morphology" value=(m.key())
@@ -177,6 +264,42 @@ pub async fn profile_page(
                     span.muted { " — " (m.blurb()) }
                 }
             }
+        },
+    ))
+}
+
+/// POST /languages/{id}/grammar/profile
+pub async fn save_profile(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+    Form(form): Form<FormMap>,
+) -> Result<Response, AppError> {
+    let (_user, language, phonology) = wizard_gate!(&state, &session, id);
+    let g = ensure_grammar(&state, &language, &phonology).await?;
+    if let Some(m) = MorphType::parse(val(&form, "morphology")) {
+        if m != g.morphology {
+            let fresh = draft(&phonology, language.id, Some(m))?;
+            save_grammar(&state, language.id, &fresh).await?;
+        }
+    }
+    Ok(save_redirect(language.id, "profile"))
+}
+
+// ---------- Step 2: clauses ----------
+
+/// GET /languages/{id}/grammar/clauses
+pub async fn clauses_page(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+) -> Result<Response, AppError> {
+    let (user, language, phonology) = wizard_gate!(&state, &session, id);
+    let g = ensure_grammar(&state, &language, &phonology).await?;
+    Ok(wizard_page(
+        &user, &language, "clauses", "Clause structure",
+        Some("The skeleton every sentence hangs on."),
+        html! {
             h2 { "Word order" }
             @for wo in WordOrder::ALL {
                 label.radio {
@@ -213,14 +336,12 @@ pub async fn profile_page(
                 input type="radio" name="possessor" value="after" checked[!g.possessor_before_noun];
                 " After — " span.ph { "den of-wolf" }
             }
-            button type="submit" style="margin-top:1.5rem" { "Save — on to nouns →" }
-        }
-    };
-    Ok(views::layout("Grammar: profile", Some(&user), body).into_response())
+        },
+    ))
 }
 
-/// POST /languages/{id}/grammar/profile
-pub async fn save_profile(
+/// POST /languages/{id}/grammar/clauses
+pub async fn save_clauses(
     State(state): State<AppState>,
     session: Session,
     Path(id): Path<i64>,
@@ -228,13 +349,6 @@ pub async fn save_profile(
 ) -> Result<Response, AppError> {
     let (_user, language, phonology) = wizard_gate!(&state, &session, id);
     let mut g = ensure_grammar(&state, &language, &phonology).await?;
-    // A temperament change re-drafts everything under the new bias; the
-    // clause choices from this very form are applied on top.
-    if let Some(m) = MorphType::parse(val(&form, "morphology")) {
-        if m != g.morphology {
-            g = draft(&phonology, language.id, Some(m))?;
-        }
-    }
     if let Some(wo) = WordOrder::parse(val(&form, "word_order")) {
         g.word_order = wo;
     }
@@ -242,20 +356,19 @@ pub async fn save_profile(
     g.adj_before_noun = val(&form, "adjectives") == "before";
     g.possessor_before_noun = val(&form, "possessor") == "before";
     save_grammar(&state, language.id, &g).await?;
-    Ok(Redirect::to(&format!("/languages/{}/grammar/nouns", language.id)).into_response())
+    Ok(save_redirect(language.id, "clauses"))
 }
 
-// ---------- Step 2: nouns & pronouns ----------
+// ---------- Step 3: number ----------
 
-/// GET /languages/{id}/grammar/nouns
-pub async fn nouns_page(
+/// GET /languages/{id}/grammar/number
+pub async fn number_page(
     State(state): State<AppState>,
     session: Session,
     Path(id): Path<i64>,
 ) -> Result<Response, AppError> {
     let (user, language, phonology) = wizard_gate!(&state, &session, id);
     let g = ensure_grammar(&state, &language, &phonology).await?;
-
     let (num_kind, num_strategy, dual_v, plural_v) = match &g.number {
         NumberSystem::NoMarking => ("none", NumStrategy::Suffix, String::new(), String::new()),
         NumberSystem::Plural { strategy, plural } => {
@@ -265,18 +378,10 @@ pub async fn nouns_page(
             ("dual", *strategy, dual.clone(), plural.clone())
         }
     };
-    let extra_of = |name: &str| -> Option<&CaseAffix> {
-        g.extra_cases.iter().find(|c| c.name == name)
-    };
-
-    let body = html! {
-        p.eyebrow {
-            a href={ "/languages/" (language.id) "/grammar/profile" } class="muted" { "← Profile" }
-        }
-        (gsteps(language.id, "nouns"))
-        h1 { "Nouns & pronouns" }
-        form method="post" action={ "/languages/" (language.id) "/grammar/nouns" } {
-            h2 { "Number" }
+    Ok(wizard_page(
+        &user, &language, "number", "Number",
+        Some("Does the language mark how many? Plenty don't."),
+        html! {
             label.radio {
                 input type="radio" name="number" value="none" checked[num_kind == "none"];
                 " No marking — numerals and context carry it (Mandarin)"
@@ -289,20 +394,71 @@ pub async fn nouns_page(
                 input type="radio" name="number" value="dual" checked[num_kind == "dual"];
                 " Singular / dual / plural (Arabic, Slovene)"
             }
-            div.gramrow {
-                span { "Strategy:" }
-                select name="num_strategy" {
-                    option value="suffix" selected[num_strategy == NumStrategy::Suffix] { "suffix" }
-                    option value="prefix" selected[num_strategy == NumStrategy::Prefix] { "prefix" }
-                    option value="particle" selected[num_strategy == NumStrategy::Particle] { "particle" }
-                    option value="reduplication" selected[num_strategy == NumStrategy::Reduplication] {
-                        "reduplication (kela → kelakela)"
+            div data-show="number=plural|dual" {
+                div.gramrow {
+                    span { "Strategy:" }
+                    select name="num_strategy" {
+                        option value="suffix" selected[num_strategy == NumStrategy::Suffix] { "suffix" }
+                        option value="prefix" selected[num_strategy == NumStrategy::Prefix] { "prefix" }
+                        option value="particle" selected[num_strategy == NumStrategy::Particle] { "particle" }
+                        option value="reduplication" selected[num_strategy == NumStrategy::Reduplication] {
+                            "reduplication (kela → kelakela)"
+                        }
                     }
                 }
-                span { "plural:" } (text_in("plural_form", &plural_v))
-                span { "dual:" } (text_in("dual_form", &dual_v))
+                div.gramrow data-show="num_strategy=suffix|prefix|particle" {
+                    span { "Plural form:" } (text_r(language.id, "plural_form", &plural_v))
+                }
+                div.gramrow data-show="number=dual" {
+                    span { "Dual form:" } (text_r(language.id, "dual_form", &dual_v))
+                }
             }
-            h2 { "Case" }
+        },
+    ))
+}
+
+/// POST /languages/{id}/grammar/number
+pub async fn save_number(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+    Form(form): Form<FormMap>,
+) -> Result<Response, AppError> {
+    let (_user, language, phonology) = wizard_gate!(&state, &session, id);
+    let mut g = ensure_grammar(&state, &language, &phonology).await?;
+    let strategy = NumStrategy::parse(val(&form, "num_strategy")).unwrap_or(NumStrategy::Suffix);
+    let plural = val(&form, "plural_form").to_string();
+    let dual = val(&form, "dual_form").to_string();
+    // Reduplication needs no form; keep whatever string is stored.
+    let plural_ok = !plural.is_empty() || strategy == NumStrategy::Reduplication;
+    g.number = match val(&form, "number") {
+        "none" => NumberSystem::NoMarking,
+        "dual" if plural_ok && !dual.is_empty() => {
+            NumberSystem::DualPlural { strategy, dual, plural }
+        }
+        "plural" | "dual" if plural_ok => NumberSystem::Plural { strategy, plural },
+        _ => g.number,
+    };
+    save_grammar(&state, language.id, &g).await?;
+    Ok(save_redirect(language.id, "number"))
+}
+
+// ---------- Step 4: case ----------
+
+/// GET /languages/{id}/grammar/case
+pub async fn case_page(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+) -> Result<Response, AppError> {
+    let (user, language, phonology) = wizard_gate!(&state, &session, id);
+    let g = ensure_grammar(&state, &language, &phonology).await?;
+    let extra_of =
+        |name: &str| -> Option<&CaseAffix> { g.extra_cases.iter().find(|c| c.name == name) };
+    Ok(wizard_page(
+        &user, &language, "case", "Case",
+        Some("Do nouns wear their role in the sentence, or does word order carry it?"),
+        html! {
             label.radio {
                 input type="radio" name="alignment" value="neutral"
                     checked[g.alignment == Alignment::Neutral];
@@ -317,21 +473,74 @@ pub async fn nouns_page(
                 input type="radio" name="alignment" value="ergabs"
                     checked[g.alignment == Alignment::ErgAbs];
                 " Ergative–absolutive — transitive subjects get the suffix "
-                span.muted { "(Basque, Georgian — a bold, wonderful choice)" }
+                span.muted { "(Basque, Georgian)" }
             }
-            div.gramrow {
-                span { "Core case suffix:" } (text_in("core_case", &g.core_case))
-            }
-            p.muted style="font-size:.9rem" { "Further cases, each a suffix:" }
-            @for name in lex::grammar::EXTRA_CASE_NAMES {
-                @let existing = extra_of(name);
-                label.radio {
-                    input type="checkbox" name={ "case_" (name) } checked[existing.is_some()];
-                    " " (name) " "
-                    input.ph type="text" name={ "caseform_" (name) }
-                        value=(existing.map(|c| c.suffix.as_str()).unwrap_or(""));
+            div data-show="alignment=nomacc|ergabs" {
+                div.gramrow {
+                    span { "Core case suffix:" } (text_r(language.id, "core_case", &g.core_case))
+                }
+                h2 { "Further cases" }
+                p.muted style="font-size:.9rem" { "Each is a suffix. Check what exists." }
+                @for name in lex::grammar::EXTRA_CASE_NAMES {
+                    @let existing = extra_of(name);
+                    label.radio {
+                        input type="checkbox" name={ "case_" (name) } checked[existing.is_some()];
+                        " " (name) " "
+                        span data-show={ "case_" (name) "=on" } {
+                            (text_r(language.id, &format!("caseform_{name}"),
+                                existing.map(|c| c.suffix.as_str()).unwrap_or("")))
+                        }
+                    }
                 }
             }
+        },
+    ))
+}
+
+/// POST /languages/{id}/grammar/case
+pub async fn save_case(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+    Form(form): Form<FormMap>,
+) -> Result<Response, AppError> {
+    let (_user, language, phonology) = wizard_gate!(&state, &session, id);
+    let mut g = ensure_grammar(&state, &language, &phonology).await?;
+    if let Some(a) = Alignment::parse(val(&form, "alignment")) {
+        g.alignment = a;
+    }
+    set_if(&form, "core_case", &mut g.core_case);
+    if g.alignment == Alignment::Neutral {
+        g.extra_cases.clear();
+    } else {
+        g.extra_cases = lex::grammar::EXTRA_CASE_NAMES
+            .iter()
+            .filter(|n| form.contains_key(&format!("case_{n}")))
+            .filter_map(|n| {
+                let suffix = val(&form, &format!("caseform_{n}"));
+                (!suffix.is_empty())
+                    .then(|| CaseAffix { name: n.to_string(), suffix: suffix.to_string() })
+            })
+            .collect();
+    }
+    save_grammar(&state, language.id, &g).await?;
+    Ok(save_redirect(language.id, "case"))
+}
+
+// ---------- Step 5: gender & articles ----------
+
+/// GET /languages/{id}/grammar/gender
+pub async fn gender_page(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+) -> Result<Response, AppError> {
+    let (user, language, phonology) = wizard_gate!(&state, &session, id);
+    let g = ensure_grammar(&state, &language, &phonology).await?;
+    Ok(wizard_page(
+        &user, &language, "gender", "Gender & articles",
+        None,
+        html! {
             h2 { "Gender / noun class" }
             label.radio {
                 input type="radio" name="gender" value="none" checked[g.gender == GenderSystem::None];
@@ -340,7 +549,7 @@ pub async fn nouns_page(
             label.radio {
                 input type="radio" name="gender" value="animate"
                     checked[g.gender == GenderSystem::AnimateInanimate];
-                " Animate / inanimate"
+                " Animate / inanimate — third-person pronouns for animates, demonstratives for the rest"
             }
             label.radio {
                 input type="radio" name="gender" value="mascfem"
@@ -350,51 +559,24 @@ pub async fn nouns_page(
             h2 { "Articles" }
             label.radio {
                 input type="checkbox" name="def_on" checked[g.definite_article.is_some()];
-                " Definite (\"the\"): "
-                input.ph type="text" name="def_form"
-                    value=(g.definite_article.as_deref().unwrap_or(""));
+                " Definite (\"the\") "
+                span data-show="def_on=on" {
+                    (text_r(language.id, "def_form", g.definite_article.as_deref().unwrap_or("")))
+                }
             }
             label.radio {
                 input type="checkbox" name="indef_on" checked[g.indefinite_article.is_some()];
-                " Indefinite (\"a\"): "
-                input.ph type="text" name="indef_form"
-                    value=(g.indefinite_article.as_deref().unwrap_or(""));
-            }
-            h2 { "Pronouns" }
-            label.radio {
-                input type="checkbox" name="pronoun_case" checked[g.pronoun_case];
-                " Pronouns decline for case even if nouns don't (like English him/his)"
-            }
-            div.chart-scroll {
-                table.lex {
-                    thead {
-                        tr {
-                            th {}
-                            th { @if g.alignment == Alignment::ErgAbs { "absolutive" } @else { "subject" } }
-                            th { @if g.alignment == Alignment::ErgAbs { "ergative" } @else { "object" } }
-                            th { "possessive" }
-                        }
-                    }
-                    tbody {
-                        @for (i, p) in g.pronouns.iter().enumerate() {
-                            tr {
-                                th.manner { (p.label()) }
-                                td { (text_in(&format!("pr_{i}_a"), &p.a)) }
-                                td { (text_in(&format!("pr_{i}_b"), &p.b)) }
-                                td { (text_in(&format!("pr_{i}_g"), &p.gen)) }
-                            }
-                        }
-                    }
+                " Indefinite (\"a\") "
+                span data-show="indef_on=on" {
+                    (text_r(language.id, "indef_form", g.indefinite_article.as_deref().unwrap_or("")))
                 }
             }
-            button type="submit" style="margin-top:1rem" { "Save — on to verbs →" }
-        }
-    };
-    Ok(views::layout("Grammar: nouns", Some(&user), body).into_response())
+        },
+    ))
 }
 
-/// POST /languages/{id}/grammar/nouns
-pub async fn save_nouns(
+/// POST /languages/{id}/grammar/gender
+pub async fn save_gender(
     State(state): State<AppState>,
     session: Session,
     Path(id): Path<i64>,
@@ -402,59 +584,98 @@ pub async fn save_nouns(
 ) -> Result<Response, AppError> {
     let (_user, language, phonology) = wizard_gate!(&state, &session, id);
     let mut g = ensure_grammar(&state, &language, &phonology).await?;
-
-    let strategy = NumStrategy::parse(val(&form, "num_strategy")).unwrap_or(NumStrategy::Suffix);
-    let plural = val(&form, "plural_form").to_string();
-    let dual = val(&form, "dual_form").to_string();
-    g.number = match val(&form, "number") {
-        "none" => NumberSystem::NoMarking,
-        "dual" if !plural.is_empty() && !dual.is_empty() => {
-            NumberSystem::DualPlural { strategy, dual, plural }
-        }
-        _ if !plural.is_empty() => NumberSystem::Plural { strategy, plural },
-        _ => g.number,
-    };
-    if let Some(a) = Alignment::parse(val(&form, "alignment")) {
-        g.alignment = a;
-    }
-    set_if(&form, "core_case", &mut g.core_case);
-    g.extra_cases = lex::grammar::EXTRA_CASE_NAMES
-        .iter()
-        .filter(|n| form.contains_key(&format!("case_{n}")))
-        .filter_map(|n| {
-            let suffix = val(&form, &format!("caseform_{n}"));
-            (!suffix.is_empty()).then(|| CaseAffix {
-                name: n.to_string(),
-                suffix: suffix.to_string(),
-            })
-        })
-        .collect();
     if let Some(gs) = GenderSystem::parse(val(&form, "gender")) {
         g.gender = gs;
     }
     g.definite_article = opt_of(&form, "def_on", "def_form");
     g.indefinite_article = opt_of(&form, "indef_on", "indef_form");
-    g.pronoun_case = form.contains_key("pronoun_case");
-    for (i, row) in g.pronouns.iter_mut().enumerate() {
-        set_if(&form, &format!("pr_{i}_a"), &mut row.a);
-        set_if(&form, &format!("pr_{i}_b"), &mut row.b);
-        set_if(&form, &format!("pr_{i}_g"), &mut row.gen);
-    }
     save_grammar(&state, language.id, &g).await?;
-    Ok(Redirect::to(&format!("/languages/{}/grammar/verbs", language.id)).into_response())
+    Ok(save_redirect(language.id, "gender"))
 }
 
-// ---------- Step 3: verbs ----------
+// ---------- Step 6: pronouns ----------
 
-/// GET /languages/{id}/grammar/verbs
-pub async fn verbs_page(
+/// GET /languages/{id}/grammar/pronouns
+pub async fn pronouns_page(
     State(state): State<AppState>,
     session: Session,
     Path(id): Path<i64>,
 ) -> Result<Response, AppError> {
     let (user, language, phonology) = wizard_gate!(&state, &session, id);
     let g = ensure_grammar(&state, &language, &phonology).await?;
+    Ok(wizard_page(
+        &user, &language, "pronouns", "Pronouns",
+        None,
+        html! {
+            label.radio {
+                input type="checkbox" name="pronoun_case" checked[g.pronoun_case];
+                " Pronouns decline for case even if nouns don't (English him/his)"
+            }
+            div.chart-scroll {
+                table.lex {
+                    thead {
+                        tr {
+                            th {}
+                            th { @if g.alignment == Alignment::ErgAbs { "absolutive" } @else { "subject" } }
+                            th { span data-show="pronoun_case=on" {
+                                @if g.alignment == Alignment::ErgAbs { "ergative" } @else { "object" }
+                            } }
+                            th { span data-show="pronoun_case=on" { "possessive" } }
+                        }
+                    }
+                    tbody {
+                        @for (i, p) in g.pronouns.iter().enumerate() {
+                            tr {
+                                th.manner { (p.label()) }
+                                td { (text_r(language.id, &format!("pr_{i}_a"), &p.a)) }
+                                td { span data-show="pronoun_case=on" {
+                                    (text_r(language.id, &format!("pr_{i}_b"), &p.b))
+                                } }
+                                td { span data-show="pronoun_case=on" {
+                                    (text_r(language.id, &format!("pr_{i}_g"), &p.gen))
+                                } }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    ))
+}
 
+/// POST /languages/{id}/grammar/pronouns
+pub async fn save_pronouns(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+    Form(form): Form<FormMap>,
+) -> Result<Response, AppError> {
+    let (_user, language, phonology) = wizard_gate!(&state, &session, id);
+    let mut g = ensure_grammar(&state, &language, &phonology).await?;
+    g.pronoun_case = form.contains_key("pronoun_case");
+    for (i, row) in g.pronouns.iter_mut().enumerate() {
+        set_if(&form, &format!("pr_{i}_a"), &mut row.a);
+        set_if(&form, &format!("pr_{i}_b"), &mut row.b);
+        set_if(&form, &format!("pr_{i}_g"), &mut row.gen);
+        if !g.pronoun_case {
+            row.b = row.a.clone();
+            row.gen = row.a.clone();
+        }
+    }
+    save_grammar(&state, language.id, &g).await?;
+    Ok(save_redirect(language.id, "pronouns"))
+}
+
+// ---------- Step 7: tense & aspect ----------
+
+/// GET /languages/{id}/grammar/tense
+pub async fn tense_page(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+) -> Result<Response, AppError> {
+    let (user, language, phonology) = wizard_gate!(&state, &session, id);
+    let g = ensure_grammar(&state, &language, &phonology).await?;
     let (tense_kind, past_v, future_v, perfective_v) = match &g.tense {
         TenseSystem::Tenseless { perfective } => {
             ("tenseless", String::new(), String::new(), perfective.clone())
@@ -464,66 +685,135 @@ pub async fn verbs_page(
             ("three", past.clone(), future.clone(), String::new())
         }
     };
-
-    let body = html! {
-        p.eyebrow {
-            a href={ "/languages/" (language.id) "/grammar/nouns" } class="muted" { "← Nouns" }
-        }
-        (gsteps(language.id, "verbs"))
-        h1 { "The verb system" }
-        form method="post" action={ "/languages/" (language.id) "/grammar/verbs" } {
+    Ok(wizard_page(
+        &user, &language, "tense", "Tense & aspect",
+        Some("The present (or non-past) is always the bare stem."),
+        html! {
             h2 { "Tense" }
             label.radio {
                 input type="radio" name="tense" value="tenseless" checked[tense_kind == "tenseless"];
-                " Tenseless — aspect carries time (Mandarin). Perfective marker: "
-                (text_in("perfective_form", &perfective_v))
+                " Tenseless — aspect carries time (Mandarin)"
             }
             label.radio {
                 input type="radio" name="tense" value="two" checked[tense_kind == "two"];
-                " Past vs non-past. Past: " (text_in("past_form", &past_v))
+                " Past vs non-past"
             }
             label.radio {
                 input type="radio" name="tense" value="three" checked[tense_kind == "three"];
-                " Past / present / future. Future: " (text_in("future_form", &future_v))
+                " Past / present / future"
+            }
+            div.gramrow data-show="tense=tenseless" {
+                span { "Perfective marker:" } (text_r(language.id, "perfective_form", &perfective_v))
+            }
+            div.gramrow data-show="tense=two|three" {
+                span { "Past marker:" } (text_r(language.id, "past_form", &past_v))
+            }
+            div.gramrow data-show="tense=three" {
+                span { "Future marker:" } (text_r(language.id, "future_form", &future_v))
             }
             label.radio {
                 input type="checkbox" name="tense_particles" checked[g.tense_particles];
-                " Tense markers are free particles before the verb, not suffixes "
+                " Markers are free particles before the verb, not suffixes "
                 span.muted { "(the isolating way)" }
+            }
+            h2 { "Aspect" }
+            label.radio {
+                input type="checkbox" name="continuous_on" checked[g.continuous.is_some()];
+                " Continuous suffix (stacks after tense) "
+                span data-show="continuous_on=on" {
+                    (text_r(language.id, "continuous_form", g.continuous.as_deref().unwrap_or("")))
+                }
+            }
+            label.radio {
+                input type="checkbox" name="aux_on" checked[g.perfect_aux.is_some()];
+                " Perfect auxiliary (\"have\") "
+                span data-show="aux_on=on" {
+                    (text_r(language.id, "aux_form", g.perfect_aux.as_deref().unwrap_or("")))
+                }
             }
             h2 { "Subject agreement" }
             label.radio {
                 input type="checkbox" name="agreement_on" checked[g.agreement.is_some()];
-                " The verb agrees with its subject (six person/number suffixes):"
+                " The verb agrees with its subject"
             }
-            div.gramrow {
+            div.gramrow data-show="agreement_on=on" {
                 @let rows = g.agreement.clone().unwrap_or_else(|| {
-                    lex::grammar::AGREEMENT_LABELS.iter().map(|l| (l.to_string(), String::new())).collect()
+                    lex::grammar::AGREEMENT_LABELS
+                        .iter()
+                        .map(|l| (l.to_string(), String::new()))
+                        .collect()
                 });
                 @for (i, (label, form_)) in rows.iter().enumerate() {
                     span.muted { (label) }
-                    (text_in(&format!("agr_{i}"), form_))
+                    (text_r(language.id, &format!("agr_{i}"), form_))
                 }
             }
-            h2 { "Aspect & auxiliaries" }
-            label.radio {
-                input type="checkbox" name="continuous_on" checked[g.continuous.is_some()];
-                " Continuous suffix (stacks after tense): "
-                input.ph type="text" name="continuous_form"
-                    value=(g.continuous.as_deref().unwrap_or(""));
-            }
-            label.radio {
-                input type="checkbox" name="aux_on" checked[g.perfect_aux.is_some()];
-                " Perfect auxiliary (\"have\"): "
-                input.ph type="text" name="aux_form"
-                    value=(g.perfect_aux.as_deref().unwrap_or(""));
-            }
+        },
+    ))
+}
+
+/// POST /languages/{id}/grammar/tense
+pub async fn save_tense(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+    Form(form): Form<FormMap>,
+) -> Result<Response, AppError> {
+    let (_user, language, phonology) = wizard_gate!(&state, &session, id);
+    let mut g = ensure_grammar(&state, &language, &phonology).await?;
+    let past = val(&form, "past_form").to_string();
+    let future = val(&form, "future_form").to_string();
+    let perfective = val(&form, "perfective_form").to_string();
+    g.tense = match val(&form, "tense") {
+        "tenseless" if !perfective.is_empty() => TenseSystem::Tenseless { perfective },
+        "three" if !past.is_empty() && !future.is_empty() => TenseSystem::ThreeWay { past, future },
+        _ if !past.is_empty() => TenseSystem::PastNonpast { past },
+        _ => g.tense,
+    };
+    g.tense_particles = form.contains_key("tense_particles");
+    g.continuous = opt_of(&form, "continuous_on", "continuous_form");
+    g.perfect_aux = opt_of(&form, "aux_on", "aux_form");
+    g.agreement = form.contains_key("agreement_on").then(|| {
+        lex::grammar::AGREEMENT_LABELS
+            .iter()
+            .enumerate()
+            .map(|(i, l)| (l.to_string(), val(&form, &format!("agr_{i}")).to_string()))
+            .filter(|(_, f)| !f.is_empty())
+            .collect::<Vec<_>>()
+    });
+    if let Some(a) = &g.agreement {
+        if a.len() != lex::grammar::AGREEMENT_LABELS.len() {
+            g.agreement = None;
+        }
+    }
+    save_grammar(&state, language.id, &g).await?;
+    Ok(save_redirect(language.id, "tense"))
+}
+
+// ---------- Step 8: verbs (copula, negation, questions, evidentiality) ----------
+
+/// GET /languages/{id}/grammar/verbs
+pub async fn verbs_page(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+) -> Result<Response, AppError> {
+    let (user, language, phonology) = wizard_gate!(&state, &session, id);
+    let g = ensure_grammar(&state, &language, &phonology).await?;
+    Ok(wizard_page(
+        &user, &language, "verbs", "Copula, negation & questions",
+        None,
+        html! {
+            h2 { "Copula" }
             label.radio {
                 input type="checkbox" name="copula_on" checked[g.copula.is_some()];
-                " Overt copula (\"to be\"): "
-                input.ph type="text" name="copula_form"
-                    value=(g.copula.as_deref().unwrap_or(""));
-                span.muted { " (unchecked: “night cold” is a sentence)" }
+                " Overt copula (\"to be\") "
+                span data-show="copula_on=on" {
+                    (text_r(language.id, "copula_form", g.copula.as_deref().unwrap_or("")))
+                }
+            }
+            p.muted style="font-size:.9rem" data-show="copula_on=off" {
+                "Zero copula: “the night cold” is a full sentence."
             }
             h2 { "Negation" }
             div.gramrow {
@@ -541,7 +831,7 @@ pub async fn verbs_page(
                         "negative auxiliary verb (Finnish-style)"
                     }
                 }
-                (text_in("negation_form", &g.negation_form))
+                (text_r(language.id, "negation_form", &g.negation_form))
             }
             h2 { "Yes/no questions" }
             @let q = |k: QuestionStrategy, label: &str| html! {
@@ -554,23 +844,24 @@ pub async fn verbs_page(
             (q(QuestionStrategy::InitialParticle, "Sentence-initial particle (Polish czy)"))
             (q(QuestionStrategy::Inversion, "Verb fronting (English)"))
             (q(QuestionStrategy::Intonation, "Intonation only"))
-            div.gramrow {
-                span { "Particle form (if used):" } (text_in("question_form", &g.question_form))
+            div.gramrow data-show="question=final_particle|initial_particle" {
+                span { "Particle:" } (text_r(language.id, "question_form", &g.question_form))
             }
             h2 { "Evidentiality" }
             label.radio {
                 input type="checkbox" name="evid_on" checked[g.evidentiality.is_some()];
-                " Verbs mark how the speaker knows (Turkish, Quechua): witnessed "
-                input.ph type="text" name="evid_seen"
-                    value=(g.evidentiality.as_ref().map(|e| e.0.as_str()).unwrap_or(""));
-                " hearsay "
-                input.ph type="text" name="evid_heard"
-                    value=(g.evidentiality.as_ref().map(|e| e.1.as_str()).unwrap_or(""));
+                " Verbs mark how the speaker knows (Turkish, Quechua)"
             }
-            button type="submit" style="margin-top:1rem" { "Save — on to word-building →" }
-        }
-    };
-    Ok(views::layout("Grammar: verbs", Some(&user), body).into_response())
+            div.gramrow data-show="evid_on=on" {
+                span { "witnessed:" }
+                (text_r(language.id, "evid_seen",
+                    g.evidentiality.as_ref().map(|e| e.0.as_str()).unwrap_or("")))
+                span { "hearsay:" }
+                (text_r(language.id, "evid_heard",
+                    g.evidentiality.as_ref().map(|e| e.1.as_str()).unwrap_or("")))
+            }
+        },
+    ))
 }
 
 /// POST /languages/{id}/grammar/verbs
@@ -582,34 +873,6 @@ pub async fn save_verbs(
 ) -> Result<Response, AppError> {
     let (_user, language, phonology) = wizard_gate!(&state, &session, id);
     let mut g = ensure_grammar(&state, &language, &phonology).await?;
-
-    let past = val(&form, "past_form").to_string();
-    let future = val(&form, "future_form").to_string();
-    let perfective = val(&form, "perfective_form").to_string();
-    g.tense = match val(&form, "tense") {
-        "tenseless" if !perfective.is_empty() => TenseSystem::Tenseless { perfective },
-        "three" if !past.is_empty() && !future.is_empty() => {
-            TenseSystem::ThreeWay { past, future }
-        }
-        _ if !past.is_empty() => TenseSystem::PastNonpast { past },
-        _ => g.tense,
-    };
-    g.tense_particles = form.contains_key("tense_particles");
-    g.agreement = form.contains_key("agreement_on").then(|| {
-        lex::grammar::AGREEMENT_LABELS
-            .iter()
-            .enumerate()
-            .map(|(i, l)| (l.to_string(), val(&form, &format!("agr_{i}")).to_string()))
-            .filter(|(_, f)| !f.is_empty())
-            .collect::<Vec<_>>()
-    });
-    if let Some(a) = &g.agreement {
-        if a.len() != lex::grammar::AGREEMENT_LABELS.len() {
-            g.agreement = None; // incomplete paradigm = no agreement
-        }
-    }
-    g.continuous = opt_of(&form, "continuous_on", "continuous_form");
-    g.perfect_aux = opt_of(&form, "aux_on", "aux_form");
     g.copula = opt_of(&form, "copula_on", "copula_form");
     if let Some(n) = NegationStrategy::parse(val(&form, "negation")) {
         g.negation = n;
@@ -622,49 +885,34 @@ pub async fn save_verbs(
     g.evidentiality = (form.contains_key("evid_on")
         && !val(&form, "evid_seen").is_empty()
         && !val(&form, "evid_heard").is_empty())
-    .then(|| {
-        (
-            val(&form, "evid_seen").to_string(),
-            val(&form, "evid_heard").to_string(),
-        )
-    });
+    .then(|| (val(&form, "evid_seen").to_string(), val(&form, "evid_heard").to_string()));
     save_grammar(&state, language.id, &g).await?;
-    Ok(
-        Redirect::to(&format!("/languages/{}/grammar/word-building", language.id))
-            .into_response(),
-    )
+    Ok(save_redirect(language.id, "verbs"))
 }
 
-// ---------- Step 4: word-building ----------
+// ---------- Step 9: modality & comparison ----------
 
-/// GET /languages/{id}/grammar/word-building
-pub async fn wordbuilding_page(
+/// GET /languages/{id}/grammar/modality
+pub async fn modality_page(
     State(state): State<AppState>,
     session: Session,
     Path(id): Path<i64>,
 ) -> Result<Response, AppError> {
     let (user, language, phonology) = wizard_gate!(&state, &session, id);
     let g = ensure_grammar(&state, &language, &phonology).await?;
-
     let (comp_kind, comp_a, comp_b) = match &g.comparative {
         Comparative::Particle { than } => ("particle", than.clone(), String::new()),
         Comparative::Suffix { suffix, than } => ("suffix", suffix.clone(), than.clone()),
         Comparative::ExceedVerb { verb } => ("exceed", verb.clone(), String::new()),
     };
-
-    let body = html! {
-        p.eyebrow {
-            a href={ "/languages/" (language.id) "/grammar/verbs" } class="muted" { "← Verbs" }
-        }
-        (gsteps(language.id, "word-building"))
-        h1 { "Word-building" }
-        form method="post" action={ "/languages/" (language.id) "/grammar/word-building" } {
-            h2 { "Modality" }
-            p.muted style="font-size:.9rem" {
-                "How does the language say can / might / must / want / "
-                "need? Not every language bolts these onto the verb — "
-                "many use whole verbs or free particles."
-            }
+    Ok(wizard_page(
+        &user, &language, "modality", "Modality & comparison",
+        Some(
+            "How does the language say can / might / must / want / need? \
+             Not every language bolts these onto the verb.",
+        ),
+        html! {
+            h2 { "Modal strategy" }
             @let ms = |k: ModalStrategy, label: &str| html! {
                 label.radio {
                     input type="radio" name="modality" value=(k.key()) checked[g.modality == k];
@@ -678,7 +926,7 @@ pub async fn wordbuilding_page(
             @for (i, (concept, form_)) in g.modals.iter().enumerate() {
                 div.gramrow {
                     span style="min-width:11rem" { (concept) }
-                    (text_in(&format!("modal_{i}"), form_))
+                    (text_r(language.id, &format!("modal_{i}"), form_))
                 }
             }
             h2 { "Comparison" }
@@ -692,49 +940,21 @@ pub async fn wordbuilding_page(
             }
             label.radio {
                 input type="radio" name="comparative" value="exceed" checked[comp_kind == "exceed"];
-                " An \"exceed\" verb — " span.ph { "mountain exceeds hill big-ness" }
+                " An \"exceed\" verb — " span.ph { "mountain exceeds hill" }
                 span.muted { " (Mandarin, Yoruba)" }
             }
             div.gramrow {
-                span { "form:" } (text_in("comp_a", &comp_a))
-                span { "than-word (suffix strategy):" } (text_in("comp_b", &comp_b))
+                span { "Form:" } (text_r(language.id, "comp_a", &comp_a))
             }
-            h2 { "Converbs" }
-            label.radio {
-                input type="checkbox" name="converbs_on" checked[g.converbs.is_some()];
-                " Subordinate clauses use converb suffixes (while / because / in-order-to):"
+            div.gramrow data-show="comparative=suffix" {
+                span { "Than-word:" } (text_r(language.id, "comp_b", &comp_b))
             }
-            @let cvs = g.converbs.clone().unwrap_or_else(|| {
-                lex::grammar::CONVERB_MEANINGS.iter().map(|m| (m.to_string(), String::new())).collect()
-            });
-            @for (i, (meaning, form_)) in cvs.iter().enumerate() {
-                div.gramrow {
-                    span style="min-width:11rem" { (meaning) }
-                    (text_in(&format!("cv_{i}"), form_))
-                }
-            }
-            h2 { "Derivational affixes" }
-            p.muted style="font-size:.9rem" {
-                "Check what exists; every language keeps a different "
-                "subset. All suffixes."
-            }
-            @for (i, meaning) in lex::grammar::DERIVATION_POOL.iter().enumerate() {
-                @let existing = g.derivations.iter().find(|(m, _)| m == meaning);
-                label.radio {
-                    input type="checkbox" name={ "der_" (i) } checked[existing.is_some()];
-                    " " (meaning) " "
-                    input.ph type="text" name={ "derform_" (i) }
-                        value=(existing.map(|(_, f)| f.as_str()).unwrap_or(""));
-                }
-            }
-            button type="submit" style="margin-top:1rem" { "Save — see the summary →" }
-        }
-    };
-    Ok(views::layout("Grammar: word-building", Some(&user), body).into_response())
+        },
+    ))
 }
 
-/// POST /languages/{id}/grammar/word-building
-pub async fn save_wordbuilding(
+/// POST /languages/{id}/grammar/modality
+pub async fn save_modality(
     State(state): State<AppState>,
     session: Session,
     Path(id): Path<i64>,
@@ -742,7 +962,6 @@ pub async fn save_wordbuilding(
 ) -> Result<Response, AppError> {
     let (_user, language, phonology) = wizard_gate!(&state, &session, id);
     let mut g = ensure_grammar(&state, &language, &phonology).await?;
-
     if let Some(m) = ModalStrategy::parse(val(&form, "modality")) {
         g.modality = m;
     }
@@ -758,6 +977,71 @@ pub async fn save_wordbuilding(
             _ => Comparative::Particle { than: a },
         };
     }
+    save_grammar(&state, language.id, &g).await?;
+    Ok(save_redirect(language.id, "modality"))
+}
+
+// ---------- Step 10: derivation & converbs ----------
+
+/// GET /languages/{id}/grammar/derivation
+pub async fn derivation_page(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+) -> Result<Response, AppError> {
+    let (user, language, phonology) = wizard_gate!(&state, &session, id);
+    let g = ensure_grammar(&state, &language, &phonology).await?;
+    Ok(wizard_page(
+        &user, &language, "derivation", "Word-building",
+        Some(
+            "Derivational suffixes grow the lexicon sideways (walk → \
+             walker, walk-place). Every language keeps a different subset.",
+        ),
+        html! {
+            h2 { "Converbs" }
+            label.radio {
+                input type="checkbox" name="converbs_on" checked[g.converbs.is_some()];
+                " Subordinate clauses use converb suffixes (while / because / in-order-to)"
+            }
+            div data-show="converbs_on=on" {
+                @let cvs = g.converbs.clone().unwrap_or_else(|| {
+                    lex::grammar::CONVERB_MEANINGS
+                        .iter()
+                        .map(|m| (m.to_string(), String::new()))
+                        .collect()
+                });
+                @for (i, (meaning, form_)) in cvs.iter().enumerate() {
+                    div.gramrow {
+                        span style="min-width:11rem" { (meaning) }
+                        (text_r(language.id, &format!("cv_{i}"), form_))
+                    }
+                }
+            }
+            h2 { "Derivational suffixes" }
+            @for (i, meaning) in lex::grammar::DERIVATION_POOL.iter().enumerate() {
+                @let existing = g.derivations.iter().find(|(m, _)| m == meaning);
+                label.radio {
+                    input type="checkbox" name={ "der_" (i) } checked[existing.is_some()];
+                    " " (meaning) " "
+                    span data-show={ "der_" (i) "=on" } {
+                        (text_r(language.id, &format!("derform_{i}"),
+                            existing.map(|(_, f)| f.as_str()).unwrap_or("")))
+                    }
+                }
+            }
+        },
+    ))
+}
+
+/// POST /languages/{id}/grammar/derivation
+pub async fn save_derivation(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+    Form(form): Form<FormMap>,
+) -> Result<Response, AppError> {
+    let (_user, language, phonology) = wizard_gate!(&state, &session, id);
+    let mut g = ensure_grammar(&state, &language, &phonology).await?;
     g.converbs = form.contains_key("converbs_on").then(|| {
         lex::grammar::CONVERB_MEANINGS
             .iter()
@@ -779,7 +1063,7 @@ pub async fn save_wordbuilding(
         })
         .collect();
     save_grammar(&state, language.id, &g).await?;
-    Ok(Redirect::to(&format!("/languages/{}/grammar/summary", language.id)).into_response())
+    Ok(save_redirect(language.id, "derivation"))
 }
 
 /// GET /languages/{id}/grammar/summary
@@ -792,7 +1076,7 @@ pub async fn summary_page(
     let content = grammar_body(&state, &user, &language).await?;
     let body = html! {
         p.eyebrow {
-            a href={ "/languages/" (language.id) "/grammar/word-building" } class="muted" { "← Word-building" }
+            a href={ "/languages/" (language.id) "/grammar/derivation" } class="muted" { "← derivation" }
         }
         (gsteps(language.id, "summary"))
         h1 { (language.name) ": the grammar" }
@@ -803,7 +1087,6 @@ pub async fn summary_page(
     };
     Ok(views::layout("Grammar summary", Some(&user), body).into_response())
 }
-
 // ---------- The sketch (Grammar tab) ----------
 
 pub(crate) async fn grammar_body(
