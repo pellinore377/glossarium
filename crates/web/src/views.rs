@@ -207,16 +207,20 @@ form.rowedit { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; 
 form.rowedit input[type=text] { min-width: 0; flex: 1 1 8rem; }
 nav.langtabs {
   display: flex; gap: .25rem; flex-wrap: wrap; align-items: baseline;
-  border-bottom: 1px solid var(--line); margin: 1.2rem 0 1.5rem;
+  border-bottom: 1px solid var(--line); margin: 1.2rem 0 0;
 }
-nav.langtabs a, nav.langtabs span.soon {
+nav.langtabs .tabbtn, nav.langtabs span.soon {
   padding: .45rem .9rem; text-decoration: none; font-size: .92rem;
   border: 1px solid transparent; border-bottom: none;
-  border-radius: 6px 6px 0 0;
+  border-radius: 6px 6px 0 0; background: transparent; cursor: pointer;
+  font-family: inherit; color: var(--accent-ink);
 }
-nav.langtabs a { color: var(--accent-ink); }
-nav.langtabs a:hover { background: var(--card); border-color: var(--line); }
-nav.langtabs span.soon { color: var(--faded); font-size: .82rem; }
+nav.langtabs .tabbtn:hover { background: var(--card); border-color: var(--line); }
+nav.langtabs .tabbtn.active {
+  background: var(--card); border-color: var(--line); font-weight: 600;
+}
+nav.langtabs span.soon { color: var(--faded); font-size: .82rem; cursor: default; }
+#tabpanel { padding-top: 1.25rem; margin-bottom: 1rem; }
 .symro {
   font: 600 1.05rem/1 "Gentium Plus", "Charis SIL", Gentium,
     "Times New Roman", serif;
@@ -354,24 +358,97 @@ pub fn project_page(user: &User, project: &Project, languages: &[Language]) -> M
     )
 }
 
+/// One in-page tab button: loads its fragment into #tabpanel and moves
+/// the active highlight, no navigation.
+fn tab_button(language_id: i64, tab: &str, active: bool, label: Markup) -> Markup {
+    let activate = "this.closest('nav').querySelectorAll('.tabbtn')\
+                    .forEach(function(b){b.classList.remove('active')});\
+                    this.classList.add('active')";
+    html! {
+        button.tabbtn.active[active]
+            type="button"
+            hx-get={ "/languages/" (language_id) "/tab/" (tab) }
+            hx-target="#tabpanel"
+            hx-swap="innerHTML"
+            onclick=(activate)
+        { (label) }
+    }
+}
+
 fn language_tabs(language: &Language, lexeme_count: i64, change_count: i64) -> Markup {
     html! {
         nav.langtabs {
             @if language.parent_id.is_some() {
-                a href={ "/languages/" (language.id) "/changes" } {
+                // The workbench is a workflow of its own (like the
+                // wizard), so it stays a full page.
+                a.tabbtn href={ "/languages/" (language.id) "/changes" } {
                     "Sound changes (" (change_count) ")"
                 }
-                a href={ "/languages/" (language.id) "/lexicon" } { "Lexicon" }
+                (tab_button(language.id, "lexicon", true, html! { "Lexicon" }))
             } @else {
-                a href={ "/languages/" (language.id) "/phonology" } { "Phonology" }
-                a href={ "/languages/" (language.id) "/lexicon" } {
+                (tab_button(language.id, "phonology", true, html! { "Phonology" }))
+                (tab_button(language.id, "lexicon", false, html! {
                     "Lexicon"
                     @if lexeme_count > 0 { " (" (lexeme_count) ")" }
-                }
+                }))
             }
             span.soon { "Grammar · soon" }
             span.soon { "Stories · soon" }
-            a href={ "/languages/" (language.id) "/settings" } { "Settings" }
+            (tab_button(language.id, "settings", false, html! { "Settings" }))
+        }
+    }
+}
+
+/// The Phonology tab: the three read-only charts, or the wizard CTA
+/// while the sound system is still unbuilt.
+pub fn phonology_tab(language: &Language, phonology: &Phonology, lexeme_count: i64) -> Markup {
+    let wizard_done = !phonology.consonants.is_empty() && !phonology.vowels.is_empty();
+    html! {
+        @if wizard_done {
+            (phoneme_charts(phonology))
+            // Once the lexicon exists, its forms are built on this sound
+            // system — reopening the wizard would desync them, so the
+            // door quietly closes.
+            @if lexeme_count == 0 {
+                p.muted style="font-size:.9rem" {
+                    a href={ "/languages/" (language.id) "/phonology" } {
+                        "Edit the phonology →"
+                    }
+                }
+            }
+        } @else {
+            div.empty {
+                "No phonology yet. The wizard walks you from an aesthetic "
+                "through consonants, vowels, syllables, and romanization."
+            }
+            form.inline method="get" action={ "/languages/" (language.id) "/phonology" } {
+                button type="submit" { "Design the phonology →" }
+            }
+        }
+    }
+}
+
+/// The Settings tab: rename and the cascade delete.
+pub fn settings_tab(language: &Language) -> Markup {
+    html! {
+        h2 { "Rename" }
+        form.inline method="post" action={ "/languages/" (language.id) "/rename" } {
+            input type="text" name="name" value=(language.name) required;
+            button.quiet type="submit" { "Rename" }
+        }
+        div.settings {
+            p.eyebrow { "Danger" }
+            p.muted style="font-size:.9rem" {
+                "Deleting a language deletes every daughter descended "
+                "from it, along with their sound changes"
+                @if language.parent_id.is_none() { " — and, for a proto-language, the family's entire lexicon" }
+                ". There is no undo."
+            }
+            form.inline.danger method="post"
+                action={ "/languages/" (language.id) "/delete" }
+                onsubmit="return confirm('Delete this language and every daughter descended from it? This cannot be undone.')" {
+                button type="submit" { "Delete language" }
+            }
         }
     }
 }
@@ -425,6 +502,18 @@ fn phoneme_charts(phonology: &Phonology) -> Markup {
                         }
                     }
                 }
+            }
+        }
+        @let others: Vec<&str> = ipa_chart::OTHER_CONSONANTS
+            .iter()
+            .flat_map(|(vl, vd, _)| [vl, vd])
+            .filter_map(|s| *s)
+            .filter(|s| cs(s))
+            .collect();
+        @if !others.is_empty() {
+            p.ph {
+                span.muted style="font-family:inherit;font-size:.8rem" { "co-articulated:  " }
+                @for s in &others { span.symro { (s) } " " }
             }
         }
         @if !phonology.vowels.is_empty() {
@@ -522,11 +611,10 @@ pub fn language_page(
     user: &User,
     project: &Project,
     language: &Language,
-    phonology: &Phonology,
     lexeme_count: i64,
     change_count: i64,
+    default_panel: Markup,
 ) -> Markup {
-    let wizard_done = !phonology.consonants.is_empty() && !phonology.vowels.is_empty();
     layout(
         &language.name,
         Some(user),
@@ -544,32 +632,7 @@ pub fn language_page(
                 }
             }
             (language_tabs(language, lexeme_count, change_count))
-
-            @if language.parent_id.is_none() {
-                @if wizard_done {
-                    h2 { "Sound system" }
-                    (phoneme_charts(phonology))
-                    // Once the lexicon exists, its forms are built on this
-                    // sound system — reopening the wizard would desync
-                    // them, so the door quietly closes.
-                    @if lexeme_count == 0 {
-                        p.muted style="font-size:.9rem" {
-                            a href={ "/languages/" (language.id) "/phonology" } {
-                                "Edit the phonology →"
-                            }
-                        }
-                    }
-                } @else {
-                    div.empty {
-                        "No phonology yet. The wizard walks you from an "
-                        "aesthetic through consonants, vowels, syllables, "
-                        "and romanization."
-                    }
-                    form.inline method="get" action={ "/languages/" (language.id) "/phonology" } {
-                        button type="submit" { "Design the phonology →" }
-                    }
-                }
-            }
+            div #tabpanel { (default_panel) }
 
             h2 { "Evolve" }
             p.muted style="font-size:.9rem" {
@@ -580,38 +643,6 @@ pub fn language_page(
             form.inline method="post" action={ "/languages/" (language.id) "/evolve" } {
                 input type="text" name="name" placeholder="Daughter language name" required;
                 button type="submit" { "Evolve a daughter →" }
-            }
-        },
-    )
-}
-
-pub fn language_settings_page(user: &User, language: &Language) -> Markup {
-    layout(
-        "Settings",
-        Some(user),
-        html! {
-            p.eyebrow {
-                a href={ "/languages/" (language.id) } class="muted" { "← " (language.name) }
-            }
-            h1 { (language.name) ": settings" }
-            h2 { "Rename" }
-            form.inline method="post" action={ "/languages/" (language.id) "/rename" } {
-                input type="text" name="name" value=(language.name) required;
-                button.quiet type="submit" { "Rename" }
-            }
-            div.settings {
-                p.eyebrow { "Danger" }
-                p.muted style="font-size:.9rem" {
-                    "Deleting a language deletes every daughter descended "
-                    "from it, along with their sound changes"
-                    @if language.parent_id.is_none() { " — and, for a proto-language, the family's entire lexicon" }
-                    ". There is no undo."
-                }
-                form.inline.danger method="post"
-                    action={ "/languages/" (language.id) "/delete" }
-                    onsubmit="return confirm('Delete this language and every daughter descended from it? This cannot be undone.')" {
-                    button type="submit" { "Delete language" }
-                }
             }
         },
     )

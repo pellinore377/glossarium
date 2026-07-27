@@ -194,6 +194,10 @@ fn build_inventory() -> Vec<Segment> {
     inv.push(seg("ɭ", &[RETROFLEX, LATERAL_APPROXIMANT], true));
     inv.push(seg("ʎ", &[PALATAL, LATERAL_APPROXIMANT], true));
     inv.push(seg("ʟ", &[VELAR, LATERAL_APPROXIMANT], true));
+    // Co-articulated ("other symbols"): labial–velar and labial–palatal.
+    inv.push(seg("ʍ", &[BILABIAL, VELAR, APPROXIMANT], false));
+    inv.push(seg("w", &[BILABIAL, VELAR, APPROXIMANT], true));
+    inv.push(seg("ɥ", &[BILABIAL, PALATAL, APPROXIMANT], true));
 
     // Vowels: high, low, back (None = central), round, tense.
     inv.push(vowel("i", Plus, Minus, Some(Minus), Minus, Some(Plus)));

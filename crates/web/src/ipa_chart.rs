@@ -158,6 +158,14 @@ pub const CONSONANT_ROWS: &[MannerRow] = &[
     },
 ];
 
+/// Co-articulated consonants from the IPA's "other symbols" block — the
+/// pulmonic grid has no column for two places at once, but no conlang
+/// tool can ship without /w/. (voiceless, voiced) like the chart pairs.
+pub const OTHER_CONSONANTS: &[(Option<&str>, Option<&str>, &str)] = &[
+    (Some("ʍ"), Some("w"), "labial–velar"),
+    (None, Some("ɥ"), "labial–palatal"),
+];
+
 /// Every selectable symbol on the chart — server-side validation set.
 pub fn all_consonant_symbols() -> Vec<&'static str> {
     let mut out = Vec::new();
@@ -171,6 +179,14 @@ pub fn all_consonant_symbols() -> Vec<&'static str> {
                     out.push(*s);
                 }
             }
+        }
+    }
+    for (vl, vd, _) in OTHER_CONSONANTS {
+        if let Some(s) = vl {
+            out.push(*s);
+        }
+        if let Some(s) = vd {
+            out.push(*s);
         }
     }
     out

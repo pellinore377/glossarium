@@ -83,7 +83,9 @@ async fn main() -> Result<()> {
         .route("/languages/{id}", get(routes::show_language))
         .route("/languages/{id}/rename", post(routes::rename_language))
         .route("/languages/{id}/delete", post(routes::delete_language))
-        .route("/languages/{id}/settings", get(routes::language_settings))
+        .route("/languages/{id}/tab/phonology", get(routes::tab_phonology))
+        .route("/languages/{id}/tab/lexicon", get(routes::tab_lexicon))
+        .route("/languages/{id}/tab/settings", get(routes::tab_settings))
         .route(
             "/languages/{id}/phonology/clusters",
             get(phonology::clusters_page),

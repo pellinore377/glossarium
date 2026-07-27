@@ -175,31 +175,25 @@ fn rows_fragment(rows: &[LexemeRow], rom: &BTreeMap<String, String>) -> Markup {
 
 // ---------- Pages ----------
 
-/// GET /languages/{id}/lexicon
-pub async fn lexicon_page(
-    State(state): State<AppState>,
-    session: Session,
-    Path(id): Path<i64>,
-) -> Result<Response, AppError> {
-    let user = match require_user(&state, &session).await? {
-        Ok(u) => u,
-        Err(landing) => return Ok(landing),
-    };
-    let (language, phonology) = owned_language_with_phonology(&state, &user, id).await?;
-
+/// The lexicon content without page chrome — used both by the standalone
+/// page and the Lexicon tab on the language home page.
+pub(crate) async fn lexicon_body(
+    state: &AppState,
+    user: &crate::auth::User,
+    language: &crate::routes::Language,
+    phonology: &Phonology,
+) -> Result<Markup, AppError> {
     // Daughters own no lexemes: their dictionary is the proto-lexicon
     // pushed through every sound change between there and here.
     if language.parent_id.is_some() {
-        return derived_lexicon_page(&state, &user, &language, &phonology).await;
+        return derived_lexicon_body(state, user, language, phonology).await;
     }
-    let count = lexeme_count(&state, language.id).await?;
+    let count = lexeme_count(state, language.id).await?;
 
-    let body = if count == 0 {
+    if count == 0 {
         let total = lex::seed_concepts().count();
         let ready = !phonology.vowels.is_empty();
-        html! {
-            p.eyebrow { a href={ "/languages/" (language.id) } class="muted" { "← " (language.name) } }
-            h1 { "Lexicon" }
+        return Ok(html! {
             p {
                 "Every family starts with a seed lexicon: the hundred "
                 "concepts of the Leipzig–Jakarta list — vocabulary "
@@ -227,52 +221,75 @@ pub async fn lexicon_page(
                     }
                 }
             }
+        });
+    }
+
+    let rows = fetch_rows(state, language.id, "").await?;
+    Ok(html! {
+        p.eyebrow { (count) " entr" @if count == 1 { "y" } @else { "ies" } }
+        div.lexbar {
+            input type="search" name="q" placeholder="Search gloss, form, notes…"
+                hx-get={ "/languages/" (language.id) "/lexicon/search" }
+                hx-trigger="input changed delay:250ms, search"
+                hx-target="#lexbody"
+                hx-swap="innerHTML";
         }
-    } else {
-        let rows = fetch_rows(&state, language.id, "").await?;
-        html! {
-            p.eyebrow { a href={ "/languages/" (language.id) } class="muted" { "← " (language.name) } }
-            h1 { "Lexicon" }
-            p.eyebrow { (count) " entr" @if count == 1 { "y" } @else { "ies" } }
-            div.lexbar {
-                input type="search" name="q" placeholder="Search gloss, form, notes…"
-                    hx-get={ "/languages/" (language.id) "/lexicon/search" }
-                    hx-trigger="input changed delay:250ms, search"
-                    hx-target="#lexbody"
-                    hx-swap="innerHTML";
-            }
-            form.addlex method="post" action={ "/languages/" (language.id) "/lexicon" } {
-                input type="text" name="gloss" placeholder="gloss (meaning)" required;
-                input.ph type="text" name="form_ipa" placeholder="IPA form" required;
-                select name="pos" { (pos_options("noun")) }
-                input type="text" name="notes" placeholder="notes";
-                button type="submit" { "Add" }
-            }
-            div.chart-scroll {
-                table.lex {
-                    thead {
-                        tr {
-                            th { "gloss" } th { "form" } th { "romanized" }
-                            th { "pos" } th { "notes" } th {}
-                        }
+        form.addlex
+            hx-post={ "/languages/" (language.id) "/lexicon" }
+            hx-target="#lexbody"
+            hx-swap="innerHTML"
+            hx-on--after-request="if(event.detail.successful) this.reset()"
+        {
+            input type="text" name="gloss" placeholder="gloss (meaning)" required;
+            input.ph type="text" name="form_ipa" placeholder="IPA form" required;
+            select name="pos" { (pos_options("noun")) }
+            input type="text" name="notes" placeholder="notes";
+            button type="submit" { "Add" }
+        }
+        div.chart-scroll {
+            table.lex {
+                thead {
+                    tr {
+                        th { "gloss" } th { "form" } th { "romanized" }
+                        th { "pos" } th { "notes" } th {}
                     }
-                    tbody #lexbody {
-                        (rows_fragment(&rows, &phonology.romanization))
-                    }
+                }
+                tbody #lexbody {
+                    (rows_fragment(&rows, &phonology.romanization))
                 }
             }
         }
+    })
+}
+
+/// GET /languages/{id}/lexicon — standalone page (seed-flow landing and
+/// deep links; day-to-day browsing happens in the home-page tab).
+pub async fn lexicon_page(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+) -> Result<Response, AppError> {
+    let user = match require_user(&state, &session).await? {
+        Ok(u) => u,
+        Err(landing) => return Ok(landing),
+    };
+    let (language, phonology) = owned_language_with_phonology(&state, &user, id).await?;
+    let content = lexicon_body(&state, &user, &language, &phonology).await?;
+    let body = html! {
+        p.eyebrow { a href={ "/languages/" (language.id) } class="muted" { "← " (language.name) } }
+        h1 { "Lexicon" }
+        (content)
     };
     Ok(views::layout("Lexicon", Some(&user), body).into_response())
 }
 
-/// The read-only derived dictionary for a daughter language.
-async fn derived_lexicon_page(
+/// The read-only derived dictionary content for a daughter language.
+async fn derived_lexicon_body(
     state: &AppState,
     user: &crate::auth::User,
     language: &crate::routes::Language,
     phonology: &Phonology,
-) -> Result<Response, AppError> {
+) -> Result<Markup, AppError> {
     let (proto, chain) = crate::evolve::proto_and_chain(state, user.id, language).await?;
     let lexemes = crate::evolve::proto_lexemes(state, proto.id).await?;
     let derived: Vec<(&LexemeRow, String)> = lexemes
@@ -284,9 +301,7 @@ async fn derived_lexicon_page(
         .collect();
     let changed = derived.iter().filter(|(l, d)| l.form_ipa != *d).count();
 
-    let body = html! {
-        p.eyebrow { a href={ "/languages/" (language.id) } class="muted" { "← " (language.name) } }
-        h1 { (language.name) ": derived lexicon" }
+    Ok(html! {
         @if lexemes.is_empty() {
             div.empty {
                 "The proto-language " (proto.name) " has no lexicon yet — "
@@ -332,8 +347,7 @@ async fn derived_lexicon_page(
         form.inline method="get" action={ "/languages/" (language.id) "/changes" } {
             button type="submit" { "Edit the sound changes →" }
         }
-    };
-    Ok(views::layout("Derived lexicon", Some(user), body).into_response())
+    })
 }
 
 /// POST /languages/{id}/lexicon/seed
@@ -415,7 +429,7 @@ pub async fn create_lexeme(
         Ok(u) => u,
         Err(landing) => return Ok(landing),
     };
-    let (language, _) = owned_language_with_phonology(&state, &user, id).await?;
+    let (language, phonology) = owned_language_with_phonology(&state, &user, id).await?;
 
     let gloss = form.gloss.trim();
     let form_ipa = form.form_ipa.trim();
@@ -433,7 +447,9 @@ pub async fn create_lexeme(
         .execute(&state.db)
         .await?;
     }
-    Ok(Redirect::to(&format!("/languages/{}/lexicon", language.id)).into_response())
+    // HTMX: hand back the refreshed table body in place.
+    let rows = fetch_rows(&state, language.id, "").await?;
+    Ok(rows_fragment(&rows, &phonology.romanization).into_response())
 }
 
 // ---------- Row operations (HTMX) ----------

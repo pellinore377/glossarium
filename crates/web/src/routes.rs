@@ -178,19 +178,63 @@ pub async fn show_language(
             .bind(language.id)
             .fetch_one(&state.db)
             .await?;
+    // The home page IS the default tab: phonology charts for a proto,
+    // the derived lexicon for a daughter.
+    let default_panel = if language.parent_id.is_none() {
+        views::phonology_tab(&language, &phonology, lexeme_count)
+    } else {
+        crate::lexicon::lexicon_body(&state, &user, &language, &phonology).await?
+    };
     Ok(views::language_page(
         &user,
         &project,
         &language,
-        &phonology,
         lexeme_count,
         change_count,
+        default_panel,
     )
     .into_response())
 }
 
-/// GET /languages/{id}/settings
-pub async fn language_settings(
+/// GET /languages/{id}/tab/phonology (HTMX)
+pub async fn tab_phonology(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+) -> Result<Response, AppError> {
+    let user = match require_user(&state, &session).await? {
+        Ok(u) => u,
+        Err(landing) => return Ok(landing),
+    };
+    let (language, phonology) =
+        crate::phonology::owned_language_with_phonology(&state, &user, id).await?;
+    let (lexeme_count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM lexemes WHERE language_id = ?")
+            .bind(language.id)
+            .fetch_one(&state.db)
+            .await?;
+    Ok(views::phonology_tab(&language, &phonology, lexeme_count).into_response())
+}
+
+/// GET /languages/{id}/tab/lexicon (HTMX)
+pub async fn tab_lexicon(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+) -> Result<Response, AppError> {
+    let user = match require_user(&state, &session).await? {
+        Ok(u) => u,
+        Err(landing) => return Ok(landing),
+    };
+    let (language, phonology) =
+        crate::phonology::owned_language_with_phonology(&state, &user, id).await?;
+    Ok(crate::lexicon::lexicon_body(&state, &user, &language, &phonology)
+        .await?
+        .into_response())
+}
+
+/// GET /languages/{id}/tab/settings (HTMX)
+pub async fn tab_settings(
     State(state): State<AppState>,
     session: Session,
     Path(id): Path<i64>,
@@ -201,7 +245,7 @@ pub async fn language_settings(
     };
     let (language, _) =
         crate::phonology::owned_language_with_phonology(&state, &user, id).await?;
-    Ok(views::language_settings_page(&user, &language).into_response())
+    Ok(views::settings_tab(&language).into_response())
 }
 
 #[derive(Deserialize)]

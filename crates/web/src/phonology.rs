@@ -285,6 +285,26 @@ pub async fn consonants_page(
                 }
             }
         }
+        h2 { "Other symbols" }
+        p.muted style="font-size:.9rem" {
+            "Co-articulated consonants — two places at once, so the grid "
+            "has no column for them. /w/ lives here."
+        }
+        div.chart-scroll {
+            table.ipa style="min-width:auto;width:auto" {
+                tbody {
+                    @for (vl, vd, label) in ipa_chart::OTHER_CONSONANTS {
+                        tr {
+                            th.manner { (label) }
+                            td {
+                                @if let Some(s) = vl { (sym_button(language.id, s, is_on(s))) }
+                                @if let Some(s) = vd { (sym_button(language.id, s, is_on(s))) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         (warnings_fragment(&phonology.consonants))
         form.inline method="get" action={ "/languages/" (language.id) "/phonology/vowels" } {
             button type="submit" { "Continue to vowels →" }
