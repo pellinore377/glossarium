@@ -6,6 +6,7 @@
 //! colexification data all speak the same key space.
 
 pub mod gen;
+pub mod grammar;
 
 use serde::{Deserialize, Serialize};
 

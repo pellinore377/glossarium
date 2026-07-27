@@ -46,6 +46,12 @@ pub struct Phonology {
     pub onset_clusters: Option<Vec<String>>,
     #[serde(default)]
     pub coda_clusters: Option<Vec<String>>,
+    /// Which single consonants may appear in each position at all.
+    /// None = everything selected on the consonant chart.
+    #[serde(default)]
+    pub onset_singles: Option<Vec<String>>,
+    #[serde(default)]
+    pub coda_singles: Option<Vec<String>>,
     #[serde(default)]
     pub stress: Option<String>,
     #[serde(default)]
@@ -805,11 +811,45 @@ fn cluster_grid(
     }
 }
 
+/// A row of toggle buttons: which consonants may occupy this position.
+fn singles_row(
+    language_id: i64,
+    kind: &str,
+    consonants: &[String],
+    allowed: &[String],
+) -> Markup {
+    let is_on = |s: &str| allowed.iter().any(|x| x == s);
+    html! {
+        div.singlesrow {
+            @for c in consonants {
+                button.sym.on[is_on(c)]
+                    type="button"
+                    onclick="this.classList.toggle('on')"
+                    hx-post={ "/languages/" (language_id) "/phonology/clusters/single" }
+                    hx-vals=(format!(r#"{{"kind":"{kind}","symbol":"{c}"}}"#))
+                    hx-target={ "#sinfo-" (kind) }
+                    hx-swap="outerHTML"
+                { (c) }
+            }
+        }
+        (singles_info_fragment(kind, allowed.len(), consonants.len()))
+    }
+}
+
+fn singles_info_fragment(kind: &str, allowed: usize, total: usize) -> Markup {
+    html! {
+        p.eyebrow id={ "sinfo-" (kind) } {
+            (allowed) " of " (total) " consonants allowed in " (kind) " position"
+        }
+    }
+}
+
 /// GET /languages/{id}/phonology/clusters
 ///
-/// Only meaningful when the syllable template allows clusters at all;
-/// defaults are materialized from the sonority heuristic on first visit,
-/// so the grids start sensible rather than empty.
+/// Positional phonotactics: which consonants may occupy each margin at
+/// all, then which pairs may cluster. Defaults are materialized on first
+/// visit — every consonant allowed everywhere, clusters from the
+/// sonority heuristic — so the page starts sensible rather than empty.
 pub async fn clusters_page(
     State(state): State<AppState>,
     session: Session,
@@ -825,15 +865,25 @@ pub async fn clusters_page(
     let mut consonants = phonology.consonants.clone();
     consonants.sort_by_key(|s| ipa_chart::consonant_order(s));
 
-    let onset_possible = syl.onset_max >= 2 && consonants.len() >= 2;
-    let coda_possible = syl.coda_max >= 2 && consonants.len() >= 2;
+    let onsets_used = syl.onset_max >= 1 && !consonants.is_empty();
+    let codas_used = syl.coda_max >= 1 && !consonants.is_empty();
+    let onset_pairs_used = syl.onset_max >= 2 && consonants.len() >= 2;
+    let coda_pairs_used = syl.coda_max >= 2 && consonants.len() >= 2;
 
     let mut changed = false;
-    if onset_possible && phonology.onset_clusters.is_none() {
+    if onsets_used && phonology.onset_singles.is_none() {
+        phonology.onset_singles = Some(consonants.clone());
+        changed = true;
+    }
+    if codas_used && phonology.coda_singles.is_none() {
+        phonology.coda_singles = Some(consonants.clone());
+        changed = true;
+    }
+    if onset_pairs_used && phonology.onset_clusters.is_none() {
         phonology.onset_clusters = Some(lex::gen::default_pairs(&consonants, true));
         changed = true;
     }
-    if coda_possible && phonology.coda_clusters.is_none() {
+    if coda_pairs_used && phonology.coda_clusters.is_none() {
         phonology.coda_clusters = Some(lex::gen::default_pairs(&consonants, false));
         changed = true;
     }
@@ -846,44 +896,100 @@ pub async fn clusters_page(
             a href={ "/languages/" (language.id) "/phonology/phonotactics" } class="muted" { "← Syllable structure" }
         }
         (wizard_steps("clusters"))
-        h1 { "Consonant clusters" }
-        @if !onset_possible && !coda_possible {
+        h1 { "Consonant positions" }
+        @if !onsets_used && !codas_used {
             div.empty {
-                "Your syllable template ("
-                (syl.template())
-                ") never puts two consonants side by side, so there are "
-                "no clusters to curate. Carry on."
+                "Your syllable template (" (syl.template()) ") has no "
+                "consonant slots, so there is nothing to curate here."
             }
         } @else {
             p {
-                "Which consonants may actually sit next to each other? "
-                "The grids start from the sonority defaults — clusters "
-                "that rise toward the vowel in onsets (/pr/, /st/) and "
-                "fall away from it in codas (/rp/) — but every language "
-                "has opinions. English allows /sf/ in \"sphere\" and bans "
-                "/ps/ at word start; Greek disagrees on both. Click to "
-                "toggle."
+                "Not every consonant goes everywhere. English never begins "
+                "a word with /ŋ/; Japanese ends syllables only in nasals; "
+                "Spanish tolerates no word-final /p t k/. First decide "
+                "which consonants may occupy each position at all — then, "
+                "if your template allows clusters, which pairs may touch."
             }
-            @if onset_possible {
+            @if onsets_used {
+                h2 { "Syllable-initial consonants" }
+                (singles_row(language.id, "onset", &consonants,
+                    phonology.onset_singles.as_deref().unwrap_or(&[])))
+            }
+            @if codas_used {
+                h2 { "Syllable-final consonants" }
+                (singles_row(language.id, "coda", &consonants,
+                    phonology.coda_singles.as_deref().unwrap_or(&[])))
+            }
+            @if onset_pairs_used {
                 h2 { "Onset clusters" }
+                p.muted style="font-size:.9rem" {
+                    "Pre-filled from sonority: clusters that rise toward "
+                    "the vowel (/pr/, /st/). Click to toggle."
+                }
                 (cluster_grid(language.id, "onset", &consonants,
                     phonology.onset_clusters.as_deref().unwrap_or(&[])))
             }
-            @if coda_possible {
+            @if coda_pairs_used {
                 h2 { "Coda clusters" }
+                p.muted style="font-size:.9rem" {
+                    "Pre-filled falling away from the vowel (/rp/, /nt/)."
+                }
                 (cluster_grid(language.id, "coda", &consonants,
                     phonology.coda_clusters.as_deref().unwrap_or(&[])))
             }
-            p.muted style="font-size:.9rem" {
-                "Three-consonant clusters are chains of allowed pairs: "
-                "/spr/ works when /sp/ and /pr/ both do."
+            @if onset_pairs_used || coda_pairs_used {
+                p.muted style="font-size:.9rem" {
+                    "Three-consonant clusters are chains of allowed pairs: "
+                    "/spr/ works when /sp/ and /pr/ both do."
+                }
             }
         }
         form.inline method="get" action={ "/languages/" (language.id) "/phonology/stress" } {
             button type="submit" { "Continue to stress →" }
         }
     };
-    Ok(views::layout("Clusters", Some(&user), body).into_response())
+    Ok(views::layout("Positions", Some(&user), body).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct ToggleSingle {
+    kind: String,
+    symbol: String,
+}
+
+/// POST /languages/{id}/phonology/clusters/single (HTMX)
+pub async fn toggle_single(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+    Form(form): Form<ToggleSingle>,
+) -> Result<Response, AppError> {
+    let user = match require_user(&state, &session).await? {
+        Ok(u) => u,
+        Err(landing) => return Ok(landing),
+    };
+    let (language, mut phonology) = owned_language_with_phonology(&state, &user, id).await?;
+    let total = phonology.consonants.len();
+    let valid = phonology.consonants.iter().any(|x| *x == form.symbol)
+        && matches!(form.kind.as_str(), "onset" | "coda");
+
+    let mut allowed = 0usize;
+    if valid {
+        let list = if form.kind == "onset" {
+            phonology.onset_singles.get_or_insert_with(Vec::new)
+        } else {
+            phonology.coda_singles.get_or_insert_with(Vec::new)
+        };
+        match list.iter().position(|p| *p == form.symbol) {
+            Some(i) => {
+                list.remove(i);
+            }
+            None => list.push(form.symbol.clone()),
+        }
+        allowed = list.len();
+        save_phonology(&state, language.id, &phonology).await?;
+    }
+    Ok(singles_info_fragment(&form.kind, allowed, total).into_response())
 }
 
 #[derive(Deserialize)]

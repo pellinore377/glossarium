@@ -50,6 +50,11 @@ pub struct Rule {
     pub right: Vec<EnvSegment>,
     #[serde(default = "Boundary::anywhere")]
     pub boundary: Boundary,
+    /// Minimal-word condition: words shorter than this many segments are
+    /// exempt. Real erosion works this way — French apocope never turned
+    /// /no/ into /n/; content words defend a minimal CV. Zero = no guard.
+    #[serde(default)]
+    pub min_segments: usize,
 }
 
 impl Boundary {
@@ -119,6 +124,9 @@ impl RuleChain {
 pub fn apply_rule(rule: &Rule, word: &Word) -> Word {
     let segs = &word.segments;
     let n = segs.len();
+    if n < rule.min_segments {
+        return word.clone();
+    }
     let mut out: Vec<Segment> = Vec::with_capacity(n);
     let mut i = 0;
 
@@ -221,6 +229,7 @@ mod tests {
             left: vec![],
             right: vec![],
             boundary: Boundary::WordFinal,
+            min_segments: 0,
         };
         let word = Word {
             segments: vec![

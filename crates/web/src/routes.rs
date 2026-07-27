@@ -178,12 +178,13 @@ pub async fn show_language(
             .bind(language.id)
             .fetch_one(&state.db)
             .await?;
-    // The home page IS the default tab: phonology charts for a proto,
-    // the derived lexicon for a daughter.
+    // The home page IS the phonology tab — for daughters too, using the
+    // derived inventory so they stand on equal footing with protos.
     let default_panel = if language.parent_id.is_none() {
         views::phonology_tab(&language, &phonology, lexeme_count)
     } else {
-        crate::lexicon::lexicon_body(&state, &user, &language, &phonology).await?
+        let derived = crate::evolve::derived_display_phonology(&state, &user, &language).await?;
+        views::phonology_tab(&language, &derived, lexeme_count)
     };
     Ok(views::language_page(
         &user,
@@ -213,6 +214,10 @@ pub async fn tab_phonology(
             .bind(language.id)
             .fetch_one(&state.db)
             .await?;
+    if language.parent_id.is_some() {
+        let derived = crate::evolve::derived_display_phonology(&state, &user, &language).await?;
+        return Ok(views::phonology_tab(&language, &derived, lexeme_count).into_response());
+    }
     Ok(views::phonology_tab(&language, &phonology, lexeme_count).into_response())
 }
 

@@ -42,7 +42,7 @@ fn lexicon_seed(language_id: i64) -> u64 {
     0x476C_6F73_7361_7269u64 ^ (language_id as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
 }
 
-fn word_spec(phonology: &Phonology, language_id: i64) -> WordSpec {
+pub(crate) fn word_spec(phonology: &Phonology, language_id: i64) -> WordSpec {
     let syl = phonology.syllable.unwrap_or_default();
     WordSpec {
         consonants: phonology.consonants.clone(),
@@ -54,6 +54,8 @@ fn word_spec(phonology: &Phonology, language_id: i64) -> WordSpec {
         coda_max: syl.coda_max,
         onset_pairs: phonology.onset_clusters.clone(),
         coda_pairs: phonology.coda_clusters.clone(),
+        onset_singles: phonology.onset_singles.clone(),
+        coda_singles: phonology.coda_singles.clone(),
         seed: lexicon_seed(language_id),
     }
 }

@@ -2,6 +2,7 @@ mod auth;
 mod config;
 mod error;
 mod evolve;
+mod grammar;
 mod ipa_chart;
 mod lexicon;
 mod phonology;
@@ -86,6 +87,12 @@ async fn main() -> Result<()> {
         .route("/languages/{id}/tab/phonology", get(routes::tab_phonology))
         .route("/languages/{id}/tab/lexicon", get(routes::tab_lexicon))
         .route("/languages/{id}/tab/settings", get(routes::tab_settings))
+        .route("/languages/{id}/tab/grammar", get(grammar::tab_grammar))
+        .route("/languages/{id}/tab/stories", get(grammar::tab_stories))
+        .route(
+            "/languages/{id}/grammar/generate",
+            post(grammar::generate_grammar),
+        )
         .route(
             "/languages/{id}/phonology/clusters",
             get(phonology::clusters_page),
@@ -93,6 +100,10 @@ async fn main() -> Result<()> {
         .route(
             "/languages/{id}/phonology/clusters/toggle",
             post(phonology::toggle_cluster),
+        )
+        .route(
+            "/languages/{id}/phonology/clusters/single",
+            post(phonology::toggle_single),
         )
         .route("/languages/{id}/phonology", get(phonology::aesthetic_page))
         .route(

@@ -41,6 +41,7 @@ struct R<'a> {
     right: &'a [F],
     boundary: Boundary,
     delete: bool,
+    min_segments: usize,
 }
 
 impl Default for R<'_> {
@@ -53,6 +54,7 @@ impl Default for R<'_> {
             right: &[],
             boundary: Boundary::Anywhere,
             delete: false,
+            min_segments: 0,
         }
     }
 }
@@ -73,6 +75,7 @@ fn rule(r: R) -> Rule {
         left: env(r.left),
         right: env(r.right),
         boundary: r.boundary,
+        min_segments: r.min_segments,
     }
 }
 
@@ -305,8 +308,8 @@ fn build() -> Vec<CatalogEntry> {
             "apocope", "Final-vowel loss (apocope)",
             "Word-final vowels drop after a consonant: kata > kat. French \
              and Old English both gutted their final syllables this way. \
-             CV monosyllables lose their only vowel too — check the \
-             preview before adopting.",
+             Words of two segments are exempt — real erosion respects a \
+             minimal word.",
             0.8,
             has(V),
             vec![rule(R {
@@ -315,6 +318,7 @@ fn build() -> Vec<CatalogEntry> {
                 delete: true,
                 left: ANY_C,
                 boundary: Boundary::WordFinal,
+                min_segments: 3,
                 ..R::default()
             })],
         ),
@@ -329,6 +333,7 @@ fn build() -> Vec<CatalogEntry> {
                 target: &[(Consonantal, Plus), (Sonorant, Minus)],
                 delete: true,
                 boundary: Boundary::WordFinal,
+                min_segments: 3,
                 ..R::default()
             })],
         ),
@@ -360,6 +365,7 @@ fn build() -> Vec<CatalogEntry> {
                 target: &[(Consonantal, Plus), (Nasal, Plus)],
                 delete: true,
                 boundary: Boundary::WordFinal,
+                min_segments: 3,
                 ..R::default()
             })],
         ),
@@ -752,6 +758,179 @@ fn build() -> Vec<CatalogEntry> {
                 }),
             ],
         ),
+        // ---- New-phoneme factories ----
+        entry(
+            "glide-formation", "Glide formation (i u > j w)",
+            "High vowels become glides before another vowel: ia > ja, \
+             ua > wa. How Latin picked up /j w/ from nothing, and where \
+             most of the world's /w/ comes from.",
+            0.8,
+            all_of(vec![
+                has(&[(Syllabic, Plus), (High, Plus)]),
+                has(V),
+            ]),
+            vec![
+                rule(R {
+                    name: "u gliding",
+                    target: &[(Syllabic, Plus), (High, Plus), (Back, Plus), (Round, Plus)],
+                    change: &[(Syllabic, Unspecified), (Low, Unspecified),
+                              (Round, Unspecified), (Tense, Unspecified),
+                              (Labial, Plus), (Distributed, Plus), (Dorsal, Plus),
+                              (Lateral, Minus)],
+                    right: V,
+                    ..R::default()
+                }),
+                rule(R {
+                    name: "i gliding",
+                    target: &[(Syllabic, Plus), (High, Plus), (Back, Minus), (Round, Minus)],
+                    change: &[(Syllabic, Unspecified), (Low, Unspecified),
+                              (Round, Unspecified), (Tense, Unspecified),
+                              (Dorsal, Plus), (Lateral, Minus)],
+                    right: V,
+                    ..R::default()
+                }),
+            ],
+        ),
+        entry(
+            "labial-gliding", "Labial gliding (β v > w)",
+            "Voiced labial fricatives melt into [w] between vowels: aba > \
+             aβa > awa. The path Latin b took in Spanish deber, and a \
+             steady source of new /w/.",
+            0.6,
+            has(&[(Consonantal, Plus), (Sonorant, Minus), (Continuant, Plus),
+                  (Labial, Plus), (Voice, Plus)]),
+            vec![rule(R {
+                name: "labial gliding",
+                target: &[(Consonantal, Plus), (Sonorant, Minus), (Continuant, Plus),
+                          (Labial, Plus), (Voice, Plus)],
+                change: &[(Consonantal, Minus), (Sonorant, Plus), (Dorsal, Plus),
+                          (High, Plus), (Back, Plus)],
+                left: V, right: V,
+                ..R::default()
+            })],
+        ),
+        entry(
+            "palatal-affrication", "Palatal affrication (t d > tʃ dʒ)",
+            "Alveolar stops affricate before high front sounds: ti > tʃi. \
+             Japanese chi, Brazilian Portuguese tia — a factory for the \
+             \"ch\" sound.",
+            0.8,
+            all_of(vec![
+                has(&[(Consonantal, Plus), (Sonorant, Minus), (Continuant, Minus),
+                      (Coronal, Plus), (Anterior, Plus)]),
+                has(&[(High, Plus), (Back, Minus)]),
+            ]),
+            vec![rule(R {
+                name: "palatal affrication",
+                target: &[(Consonantal, Plus), (Sonorant, Minus), (Continuant, Minus),
+                          (Coronal, Plus), (Anterior, Plus), (Distributed, Minus)],
+                change: &[(Anterior, Minus), (Distributed, Plus), (DelayedRelease, Plus)],
+                right: &[(High, Plus), (Back, Minus)],
+                ..R::default()
+            })],
+        ),
+        entry(
+            "velar-affrication", "Velar affrication (k ɡ > tʃ dʒ)",
+            "Velars affricate before front vowels: ke > tʃe. Latin centum \
+             to Italian cento — the other great \"ch\" factory. A louder \
+             alternative to plain velar palatalization.",
+            0.75,
+            all_of(vec![
+                has(&[(Consonantal, Plus), (Sonorant, Minus), (Continuant, Minus),
+                      (Dorsal, Plus), (High, Plus), (Back, Plus)]),
+                has(&[(Syllabic, Plus), (Back, Minus)]),
+            ]),
+            vec![rule(R {
+                name: "velar affrication",
+                target: &[(Consonantal, Plus), (Sonorant, Minus), (Continuant, Minus),
+                          (Dorsal, Plus), (High, Plus), (Back, Plus)],
+                change: &[(Dorsal, Unspecified), (High, Unspecified), (Back, Unspecified),
+                          (Coronal, Plus), (Anterior, Minus), (Distributed, Plus),
+                          (DelayedRelease, Plus)],
+                right: &[(Back, Minus)],
+                ..R::default()
+            })],
+        ),
+        entry(
+            "alveolar-affrication", "Initial affrication (t > ts)",
+            "Word-initial /t/ affricates to [ts]: tan > tsan. The High \
+             German consonant shift's most audible move (Zeit, zu).",
+            0.5,
+            has(&[(Consonantal, Plus), (Sonorant, Minus), (Continuant, Minus),
+                  (Coronal, Plus), (Anterior, Plus), (Voice, Minus)]),
+            vec![rule(R {
+                name: "initial affrication",
+                target: &[(Consonantal, Plus), (Sonorant, Minus), (Continuant, Minus),
+                          (Coronal, Plus), (Anterior, Plus), (Distributed, Minus),
+                          (Voice, Minus)],
+                change: &[(DelayedRelease, Plus)],
+                boundary: Boundary::WordInitial,
+                ..R::default()
+            })],
+        ),
+        entry(
+            "deaffrication", "Deaffrication (tʃ > ʃ)",
+            "Affricates smooth into fricatives: tʃ > ʃ, ts > s. French did \
+             it around the 13th century (chef, once \"tchef\") — and it \
+             mints /ʃ ʒ/ for free.",
+            0.65,
+            has(&[(DelayedRelease, Plus)]),
+            vec![rule(R {
+                name: "deaffrication",
+                target: &[(DelayedRelease, Plus)],
+                change: &[(DelayedRelease, Unspecified), (Continuant, Plus)],
+                ..R::default()
+            })],
+        ),
+        entry(
+            "postnasal-voicing", "Post-nasal voicing",
+            "Voiceless stops voice after nasals: anpa > amba-style. \
+             Regular across Bantu, and the source of Japanese's famous \
+             nd/mb clusters.",
+            0.7,
+            all_of(vec![
+                has(&[(Nasal, Plus)]),
+                has(VOICELESS_STOP),
+            ]),
+            vec![rule(R {
+                name: "postnasal voicing",
+                target: VOICELESS_STOP,
+                change: &[(Voice, Plus)],
+                left: &[(Nasal, Plus)],
+                ..R::default()
+            })],
+        ),
+        entry(
+            "final-vowel-reduction", "Final-vowel reduction (> ə)",
+            "Non-high vowels at the end of a word bleach to schwa: kata > \
+             katə. English and German both did exactly this on their way \
+             out of the Middle Ages. Two-segment words are exempt.",
+            0.75,
+            has(&[(Syllabic, Plus), (High, Minus)]),
+            vec![rule(R {
+                name: "final vowel reduction",
+                target: &[(Syllabic, Plus), (High, Minus)],
+                change: &[(Tense, Unspecified), (Back, Unspecified),
+                          (Round, Minus), (Low, Minus)],
+                boundary: Boundary::WordFinal,
+                min_segments: 3,
+                ..R::default()
+            })],
+        ),
+        entry(
+            "a-backing", "Low-vowel backing (a > ɑ)",
+            "The low front vowel retreats: a > ɑ. Quietly common — \
+             Persian, Hungarian's a, and half the \"dark a\" languages of \
+             the world.",
+            0.55,
+            has(&[(Syllabic, Plus), (Low, Plus), (Back, Minus), (Round, Minus)]),
+            vec![rule(R {
+                name: "a backing",
+                target: &[(Syllabic, Plus), (Low, Plus), (Back, Minus), (Round, Minus)],
+                change: &[(Back, Plus)],
+                ..R::default()
+            })],
+        ),
     ]
 }
 
@@ -810,6 +989,40 @@ mod tests {
     fn l_vocalization_end_to_end() {
         let e = catalog_entry("l-vocalization").unwrap();
         assert_eq!(derive_ipa("sal", &e.rules).unwrap(), "sau");
+    }
+
+    #[test]
+    fn minimal_words_survive_apocope() {
+        let e = catalog_entry("apocope").unwrap();
+        assert_eq!(derive_ipa("kata", &e.rules).unwrap(), "kat");
+        assert_eq!(derive_ipa("no", &e.rules).unwrap(), "no", "CV word protected");
+        assert_eq!(derive_ipa("pa", &e.rules).unwrap(), "pa");
+    }
+
+    #[test]
+    fn glide_formation_creates_w_and_j() {
+        let e = catalog_entry("glide-formation").unwrap();
+        assert_eq!(derive_ipa("ua", &e.rules).unwrap(), "wa");
+        assert_eq!(derive_ipa("ia", &e.rules).unwrap(), "ja");
+        assert_eq!(derive_ipa("ai", &e.rules).unwrap(), "ai", "offglide untouched");
+    }
+
+    #[test]
+    fn affrication_creates_tsh() {
+        let pal = catalog_entry("palatal-affrication").unwrap();
+        assert_eq!(derive_ipa("ti", &pal.rules).unwrap(), "tʃi");
+        assert_eq!(derive_ipa("ta", &pal.rules).unwrap(), "ta");
+        let vel = catalog_entry("velar-affrication").unwrap();
+        assert_eq!(derive_ipa("ke", &vel.rules).unwrap(), "tʃe");
+        let de = catalog_entry("deaffrication").unwrap();
+        assert_eq!(derive_ipa("tʃi", &de.rules).unwrap(), "ʃi");
+    }
+
+    #[test]
+    fn final_vowel_reduction_end_to_end() {
+        let e = catalog_entry("final-vowel-reduction").unwrap();
+        assert_eq!(derive_ipa("kata", &e.rules).unwrap(), "katə");
+        assert_eq!(derive_ipa("pa", &e.rules).unwrap(), "pa", "minimal word exempt");
     }
 
     #[test]

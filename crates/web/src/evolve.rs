@@ -127,6 +127,89 @@ fn derived_inventory(
     seen
 }
 
+/// Glosses for the workbench touchstone: common, concrete words that
+/// show off what a chain does. Whichever exist in the proto-lexicon are
+/// used, up to six.
+const TOUCHSTONE_GLOSSES: &[&str] = &[
+    "water", "fire", "stone, rock", "night", "dog", "name", "eye", "star",
+];
+
+fn touchstone<'a>(lexemes: &'a [LexemeRow]) -> Vec<&'a LexemeRow> {
+    TOUCHSTONE_GLOSSES
+        .iter()
+        .filter_map(|g| lexemes.iter().find(|l| l.gloss == *g))
+        .take(6)
+        .collect()
+}
+
+fn touchstone_line(words: &[&LexemeRow], rules: &[Rule]) -> String {
+    words
+        .iter()
+        .map(|l| sca::derive_ipa(&l.form_ipa, rules).unwrap_or_else(|| l.form_ipa.clone()))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The daughter's displayable phonology: derived inventory split back
+/// into chart symbols, with romanization re-materialized on top of the
+/// proto's map. Computed, never stored — like everything else about a
+/// daughter.
+pub(crate) async fn derived_display_phonology(
+    state: &AppState,
+    user: &crate::auth::User,
+    language: &Language,
+) -> Result<Phonology, AppError> {
+    let (proto, chain) = proto_and_chain(state, user.id, language).await?;
+    let (_, proto_phonology) = owned_language_with_phonology(state, user, proto.id).await?;
+    let lexemes = proto_lexemes(state, proto.id).await?;
+    let inventory = derived_inventory(&lexemes, &chain, &proto_phonology);
+
+    let is_vowel = |s: &Segment| {
+        s.features.get(&phon::Feature::Syllabic).copied() == Some(phon::FeatureValue::Plus)
+    };
+    let mut consonants: Vec<String> = inventory
+        .iter()
+        .filter(|s| !is_vowel(s))
+        .map(|s| s.ipa.clone())
+        .collect();
+    consonants.sort_by_key(|s| crate::ipa_chart::consonant_order(s));
+    let mut vowels: Vec<String> = inventory
+        .iter()
+        .filter(|s| is_vowel(s))
+        .map(|s| s.ipa.clone())
+        .collect();
+    vowels.sort_by_key(|s| crate::ipa_chart::vowel_order(s));
+
+    // A proto diphthong survives as a diphthong if its derived form is
+    // still two vowels of the current inventory.
+    let diphthongs: Vec<String> = proto_phonology
+        .diphthongs
+        .iter()
+        .filter_map(|d| sca::derive_ipa(d, &chain))
+        .filter(|d| {
+            let cs: Vec<String> = d.chars().map(|c| c.to_string()).collect();
+            cs.len() == 2 && cs.iter().all(|c| vowels.contains(c))
+        })
+        .collect();
+
+    let mut romanization = proto_phonology.romanization.clone();
+    crate::romanization::materialize(&mut romanization, &consonants, &vowels, &diphthongs);
+
+    Ok(Phonology {
+        aesthetic: None,
+        consonants,
+        vowels,
+        diphthongs,
+        syllable: proto_phonology.syllable,
+        onset_clusters: None,
+        coda_clusters: None,
+        onset_singles: None,
+        coda_singles: None,
+        stress: proto_phonology.stress.clone(),
+        romanization,
+    })
+}
+
 // ---------- Daughter creation ----------
 
 #[derive(Deserialize)]
@@ -223,6 +306,17 @@ pub async fn changes_page(
             (language.name) " is " (proto.name) " plus everything listed "
             "below, applied in order. Order matters — a rule can feed or "
             "starve the ones after it."
+        }
+        @let stone = touchstone(&lexemes);
+        @if !stone.is_empty() {
+            div.warnbox {
+                p.eyebrow { "Touchstone — six words, before and after the chain" }
+                p.ph { (proto.name) ":  /" (touchstone_line(&stone, &[])) "/" }
+                p.ph { (language.name) ":  /" (touchstone_line(&stone, &chain)) "/" }
+                p.muted style="font-size:.82rem" {
+                    "(" (stone.iter().map(|l| l.gloss.as_str()).collect::<Vec<_>>().join(", ")) ")"
+                }
+            }
         }
 
         h2 { "The chain so far" }
@@ -336,9 +430,16 @@ pub async fn preview_change(
         }
     }
 
+    let stone = touchstone(&lexemes);
     let markup = html! {
         div.warnbox {
             p.eyebrow { (entry.display_name) " — preview" }
+            @if !stone.is_empty() {
+                p.ph {
+                    "/" (touchstone_line(&stone, &chain)) "/ → /"
+                    (touchstone_line(&stone, &extended)) "/"
+                }
+            }
             @if samples.is_empty() {
                 p.ok {
                     "This change wouldn't touch a single current form. It "

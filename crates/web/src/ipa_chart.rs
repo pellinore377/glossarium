@@ -164,6 +164,8 @@ pub const CONSONANT_ROWS: &[MannerRow] = &[
 pub const OTHER_CONSONANTS: &[(Option<&str>, Option<&str>, &str)] = &[
     (Some("ʍ"), Some("w"), "labial–velar"),
     (None, Some("ɥ"), "labial–palatal"),
+    (Some("ts"), Some("dz"), "alveolar affricate"),
+    (Some("tʃ"), Some("dʒ"), "postalveolar affricate"),
 ];
 
 /// Every selectable symbol on the chart — server-side validation set.

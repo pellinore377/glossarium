@@ -227,6 +227,22 @@ nav.langtabs span.soon { color: var(--faded); font-size: .82rem; cursor: default
   color: var(--accent-ink); padding: .15rem .25rem; display: inline-block;
 }
 .settings { margin-top: 2.5rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+.singlesrow {
+  display: flex; flex-wrap: wrap; gap: .15rem; margin: .5rem 0;
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: 6px; padding: .5rem .6rem;
+}
+dl.gram { margin: 1rem 0; }
+dl.gram dt {
+  font: 500 .72rem/1 ui-monospace, monospace; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--faded); margin: 1rem 0 .25rem;
+}
+dl.gram dd { margin: 0; }
+.story { margin: 1.25rem 0; display: grid; gap: 1.1rem; }
+.storyline p { margin: .1rem 0; }
+.storyline .st1 { font-size: 1.15rem; }
+.storyline .st2 { color: var(--accent-ink); }
+.storyline .st3 { font-size: .92rem; }
 form.danger button { background: #8a3232; border-color: #8a3232; }
 ol.chain { margin: 1rem 0; padding-left: 1.6rem; }
 ol.chain li {
@@ -378,43 +394,58 @@ fn tab_button(language_id: i64, tab: &str, active: bool, label: Markup) -> Marku
 fn language_tabs(language: &Language, lexeme_count: i64, change_count: i64) -> Markup {
     html! {
         nav.langtabs {
+            (tab_button(language.id, "phonology", true, html! { "Phonology" }))
             @if language.parent_id.is_some() {
                 // The workbench is a workflow of its own (like the
                 // wizard), so it stays a full page.
                 a.tabbtn href={ "/languages/" (language.id) "/changes" } {
                     "Sound changes (" (change_count) ")"
                 }
-                (tab_button(language.id, "lexicon", true, html! { "Lexicon" }))
+                (tab_button(language.id, "lexicon", false, html! { "Lexicon" }))
             } @else {
-                (tab_button(language.id, "phonology", true, html! { "Phonology" }))
                 (tab_button(language.id, "lexicon", false, html! {
                     "Lexicon"
                     @if lexeme_count > 0 { " (" (lexeme_count) ")" }
                 }))
             }
-            span.soon { "Grammar · soon" }
-            span.soon { "Stories · soon" }
+            (tab_button(language.id, "grammar", false, html! { "Grammar" }))
+            (tab_button(language.id, "stories", false, html! { "Stories" }))
             (tab_button(language.id, "settings", false, html! { "Settings" }))
         }
     }
 }
 
-/// The Phonology tab: the three read-only charts, or the wizard CTA
-/// while the sound system is still unbuilt.
+/// The Phonology tab: the three read-only charts. For protos, links to
+/// the wizard while editing is still safe; for daughters, everything
+/// shown is derived through the sound-change chain.
 pub fn phonology_tab(language: &Language, phonology: &Phonology, lexeme_count: i64) -> Markup {
     let wizard_done = !phonology.consonants.is_empty() && !phonology.vowels.is_empty();
+    let is_daughter = language.parent_id.is_some();
     html! {
         @if wizard_done {
             (phoneme_charts(phonology))
-            // Once the lexicon exists, its forms are built on this sound
-            // system — reopening the wizard would desync them, so the
-            // door quietly closes.
-            @if lexeme_count == 0 {
+            @if is_daughter {
+                p.muted style="font-size:.9rem" {
+                    "This inventory is derived: the parent's sound system "
+                    "pushed through the chain. To change it, "
+                    a href={ "/languages/" (language.id) "/changes" } {
+                        "edit the sound changes"
+                    }
+                    "."
+                }
+            } @else if lexeme_count == 0 {
+                // Once the lexicon exists, its forms are built on this
+                // sound system — reopening the wizard would desync them.
                 p.muted style="font-size:.9rem" {
                     a href={ "/languages/" (language.id) "/phonology" } {
                         "Edit the phonology →"
                     }
                 }
+            }
+        } @else if is_daughter {
+            div.empty {
+                "Nothing to show yet — the parent language needs a "
+                "phonology (and ideally a lexicon) first."
             }
         } @else {
             div.empty {

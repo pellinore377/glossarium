@@ -46,6 +46,10 @@ const TAP: &[F] = &[
 const FRICATIVE: &[F] = &[
     (Consonantal, Plus), (Sonorant, Minus), (Continuant, Plus), (Lateral, Minus),
 ];
+const AFFRICATE: &[F] = &[
+    (Consonantal, Plus), (Sonorant, Minus), (Continuant, Minus),
+    (DelayedRelease, Plus), (Lateral, Minus),
+];
 const LATERAL_FRICATIVE: &[F] = &[
     (Consonantal, Plus), (Sonorant, Minus), (Continuant, Plus), (Lateral, Plus),
 ];
@@ -198,6 +202,11 @@ fn build_inventory() -> Vec<Segment> {
     inv.push(seg("ʍ", &[BILABIAL, VELAR, APPROXIMANT], false));
     inv.push(seg("w", &[BILABIAL, VELAR, APPROXIMANT], true));
     inv.push(seg("ɥ", &[BILABIAL, PALATAL, APPROXIMANT], true));
+    // Affricates: stop closure + delayed (fricated) release.
+    inv.push(seg("ts", &[ALVEOLAR, AFFRICATE], false));
+    inv.push(seg("dz", &[ALVEOLAR, AFFRICATE], true));
+    inv.push(seg("tʃ", &[POSTALVEOLAR, AFFRICATE], false));
+    inv.push(seg("dʒ", &[POSTALVEOLAR, AFFRICATE], true));
 
     // Vowels: high, low, back (None = central), round, tense.
     inv.push(vowel("i", Plus, Minus, Some(Minus), Minus, Some(Plus)));
@@ -337,7 +346,8 @@ mod tests {
     #[test]
     fn parses_lexicon_style_forms() {
         let w = parse_universal("tʃai").unwrap_or_else(|_| panic!());
-        // No affricate in the table: t + ʃ + a + i.
-        assert_eq!(w.segments.len(), 4);
+        // Longest match: the affricate tʃ wins over t + ʃ.
+        assert_eq!(w.segments.len(), 3);
+        assert_eq!(w.segments[0].ipa, "tʃ");
     }
 }

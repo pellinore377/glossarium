@@ -59,8 +59,8 @@ const CONSONANT_WEIGHTS: &[(&str, u32)] = &[
     ("t", 97), ("n", 96), ("m", 95), ("k", 90), ("s", 86), ("j", 84),
     ("p", 82), ("w", 80), ("l", 76), ("r", 72), ("b", 70), ("h", 64),
     ("d", 64), ("ɡ", 62), ("ŋ", 52), ("f", 48), ("ʔ", 42), ("ʃ", 40),
-    ("ɾ", 38), ("ɲ", 34), ("x", 30), ("z", 30), ("v", 28), ("ts", 26),
-    ("dʒ", 24), ("ʒ", 20), ("c", 18), ("ɟ", 16), ("q", 14), ("ð", 10),
+    ("ɾ", 38), ("tʃ", 36), ("ɲ", 34), ("x", 30), ("z", 30), ("v", 28), ("ts", 26),
+    ("dʒ", 24), ("ʒ", 20), ("c", 18), ("ɟ", 16), ("q", 14), ("dz", 10), ("ð", 10),
     ("θ", 10), ("β", 10), ("ɣ", 14), ("χ", 10), ("ħ", 8), ("ʂ", 12),
     ("ʐ", 8), ("ɳ", 10), ("ʈ", 10), ("ɖ", 8),
 ];
@@ -129,6 +129,11 @@ pub struct WordSpec {
     /// (even empty) = the user has curated the list, obey it exactly.
     pub onset_pairs: Option<Vec<String>>,
     pub coda_pairs: Option<Vec<String>>,
+    /// Which single consonants may appear in each margin at all
+    /// (many languages allow only nasals in codas, ban ŋ initially…).
+    /// `None` = every consonant.
+    pub onset_singles: Option<Vec<String>>,
+    pub coda_singles: Option<Vec<String>>,
     pub seed: u64,
 }
 
@@ -182,6 +187,8 @@ impl std::error::Error for GenError {}
 
 pub struct Generator {
     consonants: Vec<(String, u32)>,
+    onset_pool: Vec<(String, u32)>,
+    coda_pool: Vec<(String, u32)>,
     nuclei: Vec<(String, u32)>,
     onset_min: u8,
     onset_max: u8,
@@ -226,8 +233,22 @@ impl Generator {
         if consonants.is_empty() && (spec.onset_min > 0 || spec.coda_min > 0) {
             return Err(GenError::NoConsonants);
         }
+        let filter_pool = |allow: &Option<Vec<String>>| -> Vec<(String, u32)> {
+            match allow {
+                None => consonants.clone(),
+                Some(list) => consonants
+                    .iter()
+                    .filter(|(s, _)| list.contains(s))
+                    .cloned()
+                    .collect(),
+            }
+        };
+        let onset_pool = filter_pool(&spec.onset_singles);
+        let coda_pool = filter_pool(&spec.coda_singles);
         Ok(Self {
             consonants,
+            onset_pool,
+            coda_pool,
             nuclei,
             onset_min: spec.onset_min,
             onset_max: spec.onset_max,
@@ -239,6 +260,7 @@ impl Generator {
             used: HashSet::new(),
         })
     }
+
 
     /// Is `prev` + `next` a legal cluster sequence? A curated pair list
     /// wins outright; otherwise the sonority heuristic decides.
@@ -254,8 +276,13 @@ impl Generator {
         }
     }
 
-    fn margin_len(&mut self, min: u8, max: u8, weights: &[u32; 4]) -> usize {
-        if self.consonants.is_empty() {
+    fn margin_len(&mut self, min: u8, max: u8, weights: &[u32; 4], rising: bool) -> usize {
+        let pool_empty = if rising {
+            self.onset_pool.is_empty()
+        } else {
+            self.coda_pool.is_empty()
+        };
+        if pool_empty {
             return 0;
         }
         let choices: Vec<(usize, u32)> = (min..=max.min(3))
@@ -273,7 +300,11 @@ impl Generator {
     /// cluster is always legal.
     fn cluster_next(&mut self, prev: Option<&str>, rising: bool) -> Option<String> {
         for _ in 0..12 {
-            let c = self.rng.pick_weighted(&self.consonants).clone();
+            let c = if rising {
+                self.rng.pick_weighted(&self.onset_pool).clone()
+            } else {
+                self.rng.pick_weighted(&self.coda_pool).clone()
+            };
             match prev {
                 None => return Some(c),
                 Some(p) => {
@@ -304,7 +335,8 @@ impl Generator {
     fn raw_word(&mut self, syllables: usize) -> String {
         let mut segs: Vec<String> = Vec::new();
         for i in 0..syllables {
-            let onset_len = self.margin_len(self.onset_min, self.onset_max, &ONSET_LEN_WEIGHTS);
+            let onset_len =
+                self.margin_len(self.onset_min, self.onset_max, &ONSET_LEN_WEIGHTS, true);
             let mut onset = self.cluster(onset_len, true);
             // Avoid an accidental geminate across the syllable boundary.
             if let (Some(last), Some(first)) = (segs.last(), onset.first()) {
@@ -313,9 +345,9 @@ impl Generator {
                 }
             }
             // Respect a mandatory onset even if the cluster walk stalled.
-            if onset.len() < self.onset_min as usize && !self.consonants.is_empty() {
+            if onset.len() < self.onset_min as usize && !self.onset_pool.is_empty() {
                 while onset.len() < self.onset_min as usize {
-                    let c = self.rng.pick_weighted(&self.consonants).clone();
+                    let c = self.rng.pick_weighted(&self.onset_pool).clone();
                     onset.push(c);
                 }
             }
@@ -326,11 +358,12 @@ impl Generator {
             let is_final = i + 1 == syllables;
             let coda_allowed = is_final || self.coda_min > 0 || self.rng.below(2) == 0;
             if coda_allowed {
-                let coda_len = self.margin_len(self.coda_min, self.coda_max, &CODA_LEN_WEIGHTS);
+                let coda_len =
+                    self.margin_len(self.coda_min, self.coda_max, &CODA_LEN_WEIGHTS, false);
                 let mut coda = self.cluster(coda_len, false);
-                if coda.len() < self.coda_min as usize && !self.consonants.is_empty() {
+                if coda.len() < self.coda_min as usize && !self.coda_pool.is_empty() {
                     while coda.len() < self.coda_min as usize {
-                        let c = self.rng.pick_weighted(&self.consonants).clone();
+                        let c = self.rng.pick_weighted(&self.coda_pool).clone();
                         coda.push(c);
                     }
                 }
@@ -338,6 +371,27 @@ impl Generator {
             }
         }
         segs.concat()
+    }
+
+    /// A short (single-syllable) unique form — affix and particle
+    /// material for the grammar generator.
+    pub fn short_word(&mut self) -> String {
+        for _ in 0..100 {
+            let w = self.raw_word(1);
+            if self.used.insert(w.clone()) {
+                return w;
+            }
+        }
+        let w = self.raw_word(2);
+        self.used.insert(w.clone());
+        w
+    }
+
+    /// Weighted choice over indices — exposed so grammar decisions share
+    /// this generator's deterministic RNG stream.
+    pub fn pick_index(&mut self, weights: &[u32]) -> usize {
+        let items: Vec<(usize, u32)> = weights.iter().copied().enumerate().collect();
+        *self.rng.pick_weighted(&items)
     }
 
     /// A word no previous call on this generator has returned.
@@ -382,7 +436,26 @@ mod tests {
             coda_max: 1,
             onset_pairs: None,
             coda_pairs: None,
+            onset_singles: None,
+            coda_singles: None,
             seed,
+        }
+    }
+
+    #[test]
+    fn positional_pools_are_respected() {
+        let mut sp = spec(31);
+        // Only nasals may close a syllable; ŋ-style ban on onsets.
+        sp.coda_singles = Some(s(&["m", "n"]));
+        sp.onset_singles = Some(s(&["p", "t", "k", "s", "l", "r", "j", "m", "n"]));
+        let mut g = Generator::new(sp).unwrap();
+        for _ in 0..200 {
+            let w = g.word();
+            let last = w.chars().last().unwrap();
+            assert!(
+                "aiueomn".contains(last),
+                "{w} ends in a non-nasal consonant despite coda pool"
+            );
         }
     }
 
