@@ -52,6 +52,10 @@ pub struct Phonology {
     pub onset_singles: Option<Vec<String>>,
     #[serde(default)]
     pub coda_singles: Option<Vec<String>>,
+    /// Allowed coda+onset junctions across syllable boundaries.
+    /// None = default heuristic (no geminates, no voicing clashes).
+    #[serde(default)]
+    pub medial_clusters: Option<Vec<String>>,
     #[serde(default)]
     pub stress: Option<String>,
     #[serde(default)]
@@ -771,21 +775,38 @@ fn cluster_grid(
     consonants: &[String],
     allowed: &[String],
 ) -> Markup {
+    pair_grid(language_id, kind, consonants, consonants, allowed)
+}
+
+/// Toggle grid over `rows` × `cols` pairs (rows first). Geminate cells
+/// (same symbol) are hatched and unclickable.
+fn pair_grid(
+    language_id: i64,
+    kind: &str,
+    rows: &[String],
+    cols: &[String],
+    allowed: &[String],
+) -> Markup {
     let is_on = |pair: &str| allowed.iter().any(|x| x == pair);
+    let possible = rows
+        .iter()
+        .flat_map(|a| cols.iter().map(move |b| (a, b)))
+        .filter(|(a, b)| a != b)
+        .count();
     html! {
         div.chart-scroll {
             table.ipa {
                 thead {
                     tr {
                         th { span.muted { "first ↓ second →" } }
-                        @for c in consonants { th { (c) } }
+                        @for c in cols { th { (c) } }
                     }
                 }
                 tbody {
-                    @for a in consonants {
+                    @for a in rows {
                         tr {
                             th.manner { (a) }
-                            @for b in consonants {
+                            @for b in cols {
                                 @if a == b {
                                     td.x {}
                                 } @else {
@@ -807,7 +828,7 @@ fn cluster_grid(
                 }
             }
         }
-        (cluster_info_fragment(kind, allowed.len(), consonants.len() * (consonants.len() - 1)))
+        (cluster_info_fragment(kind, allowed.len(), possible))
     }
 }
 
@@ -887,9 +908,28 @@ pub async fn clusters_page(
         phonology.coda_clusters = Some(lex::gen::default_pairs(&consonants, false));
         changed = true;
     }
+    // Medial junctions arise whenever codas and onsets both exist.
+    let medial_used = onsets_used && codas_used;
+    if medial_used && phonology.medial_clusters.is_none() {
+        let codas = phonology.coda_singles.as_deref().unwrap_or(&consonants);
+        let onsets = phonology.onset_singles.as_deref().unwrap_or(&consonants);
+        phonology.medial_clusters = Some(lex::gen::default_medial_pairs(codas, onsets));
+        changed = true;
+    }
     if changed {
         save_phonology(&state, language.id, &phonology).await?;
     }
+
+    let mut coda_rows = phonology
+        .coda_singles
+        .clone()
+        .unwrap_or_else(|| consonants.clone());
+    coda_rows.sort_by_key(|s| ipa_chart::consonant_order(s));
+    let mut onset_cols = phonology
+        .onset_singles
+        .clone()
+        .unwrap_or_else(|| consonants.clone());
+    onset_cols.sort_by_key(|s| ipa_chart::consonant_order(s));
 
     let body = html! {
         p.eyebrow {
@@ -942,6 +982,19 @@ pub async fn clusters_page(
                     "Three-consonant clusters are chains of allowed pairs: "
                     "/spr/ works when /sp/ and /pr/ both do."
                 }
+            }
+            @if medial_used {
+                h2 { "Across syllables" }
+                p.muted style="font-size:.9rem" {
+                    "When one syllable's coda meets the next one's onset "
+                    "(the d·t in a word like \"lidtep\"), which pairs are "
+                    "tolerable? Pre-filled to ban geminates and "
+                    "voicing-mismatched obstruents — the two clashes ears "
+                    "notice first. Rows are the coda, columns the "
+                    "following onset."
+                }
+                (pair_grid(language.id, "medial", &coda_rows, &onset_cols,
+                    phonology.medial_clusters.as_deref().unwrap_or(&[])))
             }
         }
         form.inline method="get" action={ "/languages/" (language.id) "/phonology/stress" } {
@@ -1011,19 +1064,20 @@ pub async fn toggle_cluster(
     };
     let (language, mut phonology) = owned_language_with_phonology(&state, &user, id).await?;
 
-    let chars: Vec<String> = form.pair.chars().map(|c| c.to_string()).collect();
-    let valid = chars.len() == 2
-        && chars[0] != chars[1]
-        && chars
-            .iter()
-            .all(|c| phonology.consonants.iter().any(|x| x == c));
+    // Symbols can be multi-codepoint (tʃ), so validate by prefix-split
+    // against the inventory rather than by counting chars.
+    let valid = phonology.consonants.iter().any(|a| {
+        form.pair
+            .strip_prefix(a.as_str())
+            .map_or(false, |rest| rest != a && phonology.consonants.iter().any(|b| b == rest))
+    });
     let n = phonology.consonants.len();
 
-    if valid && matches!(form.kind.as_str(), "onset" | "coda") {
-        let list = if form.kind == "onset" {
-            phonology.onset_clusters.get_or_insert_with(Vec::new)
-        } else {
-            phonology.coda_clusters.get_or_insert_with(Vec::new)
+    if valid && matches!(form.kind.as_str(), "onset" | "coda" | "medial") {
+        let list = match form.kind.as_str() {
+            "onset" => phonology.onset_clusters.get_or_insert_with(Vec::new),
+            "coda" => phonology.coda_clusters.get_or_insert_with(Vec::new),
+            _ => phonology.medial_clusters.get_or_insert_with(Vec::new),
         };
         match list.iter().position(|p| *p == form.pair) {
             Some(i) => {
@@ -1040,7 +1094,8 @@ pub async fn toggle_cluster(
 
     let allowed = match form.kind.as_str() {
         "onset" => phonology.onset_clusters.as_ref().map_or(0, |v| v.len()),
-        _ => phonology.coda_clusters.as_ref().map_or(0, |v| v.len()),
+        "coda" => phonology.coda_clusters.as_ref().map_or(0, |v| v.len()),
+        _ => phonology.medial_clusters.as_ref().map_or(0, |v| v.len()),
     };
     Ok(cluster_info_fragment(&form.kind, allowed, n * n.saturating_sub(1)).into_response())
 }

@@ -232,6 +232,24 @@ nav.langtabs span.soon { color: var(--faded); font-size: .82rem; cursor: default
   background: var(--card); border: 1px solid var(--line);
   border-radius: 6px; padding: .5rem .6rem;
 }
+label.radio { display: block; margin: .35rem 0; }
+label.radio input[type=radio], label.radio input[type=checkbox] {
+  accent-color: var(--accent); margin-right: .25rem;
+}
+label.radio input.ph[type=text] {
+  min-width: 7rem; width: 9rem; display: inline-block;
+}
+.gramrow {
+  display: flex; gap: .6rem; align-items: center; margin: .4rem 0;
+  flex-wrap: wrap;
+}
+.gramrow input.ph[type=text] { min-width: 7rem; width: 10rem; }
+input.ph[type=text] {
+  font: 500 1.02rem/1.3 "Gentium Plus", "Charis SIL", Gentium,
+    "Times New Roman", serif;
+  padding: .3rem .5rem; border: 1px solid var(--line); border-radius: 4px;
+  background: var(--card); color: var(--accent-ink);
+}
 dl.gram { margin: 1rem 0; }
 dl.gram dt {
   font: 500 .72rem/1 ui-monospace, monospace; letter-spacing: .14em;

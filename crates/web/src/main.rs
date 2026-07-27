@@ -89,9 +89,26 @@ async fn main() -> Result<()> {
         .route("/languages/{id}/tab/settings", get(routes::tab_settings))
         .route("/languages/{id}/tab/grammar", get(grammar::tab_grammar))
         .route("/languages/{id}/tab/stories", get(grammar::tab_stories))
+        .route("/languages/{id}/grammar", get(grammar::wizard_entry))
         .route(
-            "/languages/{id}/grammar/generate",
-            post(grammar::generate_grammar),
+            "/languages/{id}/grammar/clauses",
+            get(grammar::clauses_page).post(grammar::save_clauses),
+        )
+        .route(
+            "/languages/{id}/grammar/nouns",
+            get(grammar::nouns_page).post(grammar::save_nouns),
+        )
+        .route(
+            "/languages/{id}/grammar/verbs",
+            get(grammar::verbs_page).post(grammar::save_verbs),
+        )
+        .route(
+            "/languages/{id}/grammar/word-building",
+            get(grammar::wordbuilding_page).post(grammar::save_wordbuilding),
+        )
+        .route(
+            "/languages/{id}/grammar/summary",
+            get(grammar::summary_page),
         )
         .route(
             "/languages/{id}/phonology/clusters",

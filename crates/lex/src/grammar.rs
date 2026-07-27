@@ -21,14 +21,44 @@ pub enum WordOrder {
     Sov,
     Svo,
     Vso,
+    Vos,
+    Ovs,
+    Osv,
 }
 
 impl WordOrder {
+    pub const ALL: [WordOrder; 6] = [
+        WordOrder::Sov,
+        WordOrder::Svo,
+        WordOrder::Vso,
+        WordOrder::Vos,
+        WordOrder::Ovs,
+        WordOrder::Osv,
+    ];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            WordOrder::Sov => "sov",
+            WordOrder::Svo => "svo",
+            WordOrder::Vso => "vso",
+            WordOrder::Vos => "vos",
+            WordOrder::Ovs => "ovs",
+            WordOrder::Osv => "osv",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<WordOrder> {
+        WordOrder::ALL.iter().copied().find(|w| w.key() == s)
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             WordOrder::Sov => "Subject–Object–Verb",
             WordOrder::Svo => "Subject–Verb–Object",
             WordOrder::Vso => "Verb–Subject–Object",
+            WordOrder::Vos => "Verb–Object–Subject",
+            WordOrder::Ovs => "Object–Verb–Subject",
+            WordOrder::Osv => "Object–Subject–Verb",
         }
     }
 
@@ -37,6 +67,9 @@ impl WordOrder {
             WordOrder::Sov => "the most common order on Earth (Japanese, Turkish, Latin)",
             WordOrder::Svo => "a close second (English, Mandarin, Swahili)",
             WordOrder::Vso => "rarer but sturdy (Irish, Classical Arabic, Māori)",
+            WordOrder::Vos => "uncommon (Malagasy, Fijian)",
+            WordOrder::Ovs => "vanishingly rare (Hixkaryana) — a bold choice",
+            WordOrder::Osv => "the rarest attested order — Yoda territory",
         }
     }
 }
@@ -57,45 +90,227 @@ impl Marking {
             Marking::Particle => "particle",
         }
     }
+
+    pub fn parse(s: &str) -> Option<Marking> {
+        match s {
+            "suffix" => Some(Marking::Suffix),
+            "prefix" => Some(Marking::Prefix),
+            "particle" => Some(Marking::Particle),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NegationStrategy {
+    /// A free word before the verb — the most common strategy.
+    Particle,
+    /// Bound to the verb, Silágo ke- style.
+    Prefix,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GrammarSpec {
-    pub word_order: WordOrder,
-    pub adj_before_noun: bool,
-    pub plural_marking: Marking,
-    pub plural_form: String,
-    pub past_marking: Marking,
-    pub past_form: String,
-    /// Negation is always a free particle placed before the verb — the
-    /// single most common strategy cross-linguistically.
-    pub negation_form: String,
+pub struct PronounRow {
+    pub person: u8,
+    pub plural: bool,
+    pub nom: String,
+    pub acc: String,
+    pub gen: String,
 }
 
-/// Deterministic grammar from the same phonology that built the words.
+impl PronounRow {
+    pub fn label(&self) -> &'static str {
+        match (self.person, self.plural) {
+            (1, false) => "I",
+            (2, false) => "you",
+            (3, false) => "he/she/it",
+            (1, true) => "we",
+            (2, true) => "you (pl)",
+            _ => "they",
+        }
+    }
+}
+
+/// The full grammar sketch. Every generated form is a suggestion the
+/// wizard lets the user overwrite.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GrammarSpec {
+    // Clause structure
+    pub word_order: WordOrder,
+    /// true = prepositions, false = postpositions.
+    pub prepositions: bool,
+    pub adj_before_noun: bool,
+    pub possessor_before_noun: bool,
+    // Nouns
+    pub plural_marking: Marking,
+    pub plural_form: String,
+    pub definite_article: Option<String>,
+    // Pronouns
+    pub pronoun_case: bool,
+    pub animacy: bool,
+    pub pronouns: Vec<PronounRow>,
+    // Verbs: present is the bare stem, always.
+    pub past_form: String,
+    pub future_form: Option<String>,
+    pub continuous_form: Option<String>,
+    pub perfect_aux: Option<String>,
+    /// None = zero copula (predicate stands bare next to its subject).
+    pub copula: Option<String>,
+    pub negation: NegationStrategy,
+    pub negation_form: String,
+    // Word-building
+    pub modals: Vec<(String, String)>,
+    pub derivations: Vec<(String, String)>,
+}
+
+pub const MODAL_CONCEPTS: &[&str] =
+    &["ability (can)", "possibility (might)", "obligation (must)", "desire (want to)", "necessity (need to)"];
+
+pub const DERIVATION_MEANINGS: &[&str] = &[
+    "agent (one who does)",
+    "place of",
+    "diminutive (small)",
+    "augmentative (great)",
+    "abstract quality (-ness)",
+    "potential (-able)",
+    "adverb (-ly)",
+    "collection of",
+];
+
+/// The vowel glyphs of the universal chart, for allomorphy decisions.
+pub const IPA_VOWELS: &str = "iyɨʉɯuɪʏʊeøɘɵɤoəɛœɜɞʌɔæɐaɶɑɒ";
+
+fn ends_in_vowel(s: &str) -> bool {
+    s.chars().last().map(|c| IPA_VOWELS.contains(c)).unwrap_or(false)
+}
+
+fn starts_with_vowel(s: &str) -> bool {
+    s.chars().next().map(|c| IPA_VOWELS.contains(c)).unwrap_or(false)
+}
+
+/// Suffix attachment with automatic allomorphy, Silágo-style: when a
+/// vowel-final stem meets a vowel-initial suffix, the suffix's vowel
+/// drops (kata + et → katat; kat + et → katet).
+pub fn attach_suffix(stem: &str, suffix: &str) -> String {
+    if ends_in_vowel(stem) && starts_with_vowel(suffix) && suffix.chars().count() > 1 {
+        let rest: String = suffix.chars().skip(1).collect();
+        format!("{stem}{rest}")
+    } else {
+        format!("{stem}{suffix}")
+    }
+}
+
+/// Prefix attachment: a vowel-final prefix elides its vowel before a
+/// vowel-initial stem (like Silágo's l'-).
+pub fn attach_prefix(prefix: &str, stem: &str) -> String {
+    if ends_in_vowel(prefix) && starts_with_vowel(stem) && prefix.chars().count() > 1 {
+        let cut: String = prefix
+            .chars()
+            .take(prefix.chars().count() - 1)
+            .collect();
+        format!("{cut}{stem}")
+    } else {
+        format!("{prefix}{stem}")
+    }
+}
+
+/// Deterministic first-draft grammar from the same phonology that built
+/// the words. The wizard shows every value for editing.
 pub fn generate(spec: WordSpec) -> Result<GrammarSpec, GenError> {
     let mut g = Generator::new(spec)?;
-    let word_order = match g.pick_index(&[45, 40, 15]) {
-        0 => WordOrder::Sov,
-        1 => WordOrder::Svo,
-        _ => WordOrder::Vso,
+    let word_order = WordOrder::ALL[g.pick_index(&[40, 35, 12, 6, 4, 3])];
+    // SOV languages overwhelmingly take postpositions; others lean pre.
+    let prepositions = if word_order == WordOrder::Sov {
+        g.pick_index(&[15, 85]) == 0
+    } else {
+        g.pick_index(&[85, 15]) == 0
     };
     let adj_before_noun = g.pick_index(&[1, 1]) == 0;
+    let possessor_before_noun = if word_order == WordOrder::Sov {
+        g.pick_index(&[80, 20]) == 0
+    } else {
+        g.pick_index(&[1, 1]) == 0
+    };
+
     let marking = |i: usize| match i {
         0 => Marking::Suffix,
         1 => Marking::Prefix,
         _ => Marking::Particle,
     };
     let plural_marking = marking(g.pick_index(&[70, 15, 15]));
-    let past_marking = marking(g.pick_index(&[60, 15, 25]));
+    let plural_form = g.short_word();
+    let definite_article = (g.pick_index(&[40, 60]) == 0).then(|| g.short_word());
+
+    let pronoun_case = g.pick_index(&[60, 40]) == 0;
+    let animacy = g.pick_index(&[1, 1]) == 0;
+    let acc_suffix = g.short_word();
+    let gen_prefix = g.short_word();
+    let stems = [g.short_word(), g.short_word(), g.short_word()];
+    let mut pronouns = Vec::new();
+    for plural in [false, true] {
+        for person in 1..=3u8 {
+            let base = &stems[(person - 1) as usize];
+            let nom = if plural {
+                attach_suffix(base, &plural_form)
+            } else {
+                base.clone()
+            };
+            let acc = if pronoun_case {
+                attach_suffix(&nom, &acc_suffix)
+            } else {
+                nom.clone()
+            };
+            let gen = if pronoun_case {
+                attach_prefix(&gen_prefix, &nom)
+            } else {
+                nom.clone()
+            };
+            pronouns.push(PronounRow { person, plural, nom, acc, gen });
+        }
+    }
+
+    let past_form = g.short_word();
+    let future_form = (g.pick_index(&[70, 30]) == 0).then(|| g.short_word());
+    let continuous_form = (g.pick_index(&[60, 40]) == 0).then(|| g.short_word());
+    let perfect_aux = (g.pick_index(&[50, 50]) == 0).then(|| g.short_word());
+    let copula = (g.pick_index(&[55, 45]) == 0).then(|| g.short_word());
+    let negation = if g.pick_index(&[60, 40]) == 0 {
+        NegationStrategy::Particle
+    } else {
+        NegationStrategy::Prefix
+    };
+    let negation_form = g.short_word();
+
+    let modals = MODAL_CONCEPTS
+        .iter()
+        .map(|c| (c.to_string(), g.short_word()))
+        .collect();
+    let derivations = DERIVATION_MEANINGS
+        .iter()
+        .map(|m| (m.to_string(), g.short_word()))
+        .collect();
+
     Ok(GrammarSpec {
         word_order,
+        prepositions,
         adj_before_noun,
+        possessor_before_noun,
         plural_marking,
-        plural_form: g.short_word(),
-        past_marking,
-        past_form: g.short_word(),
-        negation_form: g.short_word(),
+        plural_form,
+        definite_article,
+        pronoun_case,
+        animacy,
+        pronouns,
+        past_form,
+        future_form,
+        continuous_form,
+        perfect_aux,
+        copula,
+        negation,
+        negation_form,
+        modals,
+        derivations,
     })
 }
 
@@ -197,6 +412,7 @@ mod tests {
             coda_pairs: None,
             onset_singles: None,
             coda_singles: None,
+            medial_pairs: None,
             seed: 99,
         };
         let a = generate(spec()).unwrap();
@@ -204,6 +420,17 @@ mod tests {
         assert_eq!(a.word_order, b.word_order);
         assert_eq!(a.plural_form, b.plural_form);
         assert_eq!(a.negation_form, b.negation_form);
+        assert_eq!(a.pronouns.len(), 6);
+        assert_eq!(a.modals.len(), MODAL_CONCEPTS.len());
+        assert_eq!(a.derivations.len(), DERIVATION_MEANINGS.len());
+    }
+
+    #[test]
+    fn attachment_allomorphy() {
+        assert_eq!(attach_suffix("kata", "et"), "katat");
+        assert_eq!(attach_suffix("kat", "et"), "katet");
+        assert_eq!(attach_prefix("li", "ata"), "lata");
+        assert_eq!(attach_prefix("li", "kata"), "likata");
     }
 
     #[test]

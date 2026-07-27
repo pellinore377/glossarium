@@ -134,7 +134,38 @@ pub struct WordSpec {
     /// `None` = every consonant.
     pub onset_singles: Option<Vec<String>>,
     pub coda_singles: Option<Vec<String>>,
+    /// Allowed coda+onset sequences across a syllable boundary ("nt",
+    /// "sp"). `None` = the default heuristic: anything except geminates
+    /// and voicing-mismatched obstruent pairs (no more "lidtep").
+    pub medial_pairs: Option<Vec<String>>,
     pub seed: u64,
+}
+
+/// Do two segments clash in obstruent voicing (like /d/+/t/)? Checked
+/// against the universal feature table.
+fn obstruent_voicing_clash(a: &str, b: &str) -> bool {
+    let seg = |s: &str| phon::universal_inventory().iter().find(|x| x.ipa == s);
+    match (seg(a), seg(b)) {
+        (Some(x), Some(y)) => {
+            use phon::{Feature::*, FeatureValue::*};
+            x.get(Sonorant) == Minus && y.get(Sonorant) == Minus && x.get(Voice) != y.get(Voice)
+        }
+        _ => false,
+    }
+}
+
+/// Default cross-syllable junction list for the wizard: every coda ×
+/// onset pair except geminates and obstruent voicing clashes.
+pub fn default_medial_pairs(codas: &[String], onsets: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for a in codas {
+        for b in onsets {
+            if a != b && !obstruent_voicing_clash(a, b) {
+                out.push(format!("{a}{b}"));
+            }
+        }
+    }
+    out
 }
 
 /// The sonority-derived default cluster list the wizard starts from:
@@ -153,7 +184,7 @@ pub fn default_pairs(consonants: &[String], rising: bool) -> Vec<String> {
             } else {
                 sonority(b) < sonority(a)
             };
-            if ok {
+            if ok && !obstruent_voicing_clash(a, b) {
                 out.push(format!("{a}{b}"));
             }
         }
@@ -196,6 +227,7 @@ pub struct Generator {
     coda_max: u8,
     onset_pairs: Option<HashSet<String>>,
     coda_pairs: Option<HashSet<String>>,
+    medial_pairs: Option<HashSet<String>>,
     rng: Rng,
     used: HashSet<String>,
 }
@@ -256,9 +288,22 @@ impl Generator {
             coda_max: spec.coda_max,
             onset_pairs: spec.onset_pairs.map(|v| v.into_iter().collect()),
             coda_pairs: spec.coda_pairs.map(|v| v.into_iter().collect()),
+            medial_pairs: spec.medial_pairs.map(|v| v.into_iter().collect()),
             rng: Rng(spec.seed),
             used: HashSet::new(),
         })
+    }
+
+    fn is_consonant(&self, s: &str) -> bool {
+        self.consonants.iter().any(|(c, _)| c == s)
+    }
+
+    /// May `coda` and `onset` touch across a syllable boundary?
+    fn medial_ok(&self, coda: &str, onset: &str) -> bool {
+        match &self.medial_pairs {
+            Some(set) => set.contains(&format!("{coda}{onset}")),
+            None => coda != onset && !obstruent_voicing_clash(coda, onset),
+        }
     }
 
 
@@ -269,11 +314,12 @@ impl Generator {
         if let Some(set) = explicit {
             return set.contains(&format!("{prev}{next}"));
         }
-        if rising {
+        let sonority_ok = if rising {
             sonority(next) > sonority(prev) || (is_sibilant(prev) && sonority(next) == 1)
         } else {
             sonority(next) < sonority(prev)
-        }
+        };
+        sonority_ok && !obstruent_voicing_clash(prev, next)
     }
 
     fn margin_len(&mut self, min: u8, max: u8, weights: &[u32; 4], rising: bool) -> usize {
@@ -338,10 +384,16 @@ impl Generator {
             let onset_len =
                 self.margin_len(self.onset_min, self.onset_max, &ONSET_LEN_WEIGHTS, true);
             let mut onset = self.cluster(onset_len, true);
-            // Avoid an accidental geminate across the syllable boundary.
-            if let (Some(last), Some(first)) = (segs.last(), onset.first()) {
-                if last == first && onset.len() == 1 && self.onset_min == 0 {
-                    onset.clear();
+            // Cross-syllable junction: if the previous syllable's coda
+            // can't legally touch this onset, the coda retreats — words
+            // like "lidtep" die here.
+            if let Some(first) = onset.first().cloned() {
+                while let Some(last) = segs.last().cloned() {
+                    if self.is_consonant(&last) && !self.medial_ok(&last, &first) {
+                        segs.pop();
+                    } else {
+                        break;
+                    }
                 }
             }
             // Respect a mandatory onset even if the cluster walk stalled.
@@ -438,7 +490,26 @@ mod tests {
             coda_pairs: None,
             onset_singles: None,
             coda_singles: None,
+            medial_pairs: None,
             seed,
+        }
+    }
+
+    #[test]
+    fn no_voicing_clash_across_syllables() {
+        let mut sp = spec(41);
+        sp.consonants = s(&["p", "b", "t", "d", "k", "s", "m", "l"]);
+        let mut g = Generator::new(sp).unwrap();
+        let voiceless = "ptks";
+        let voiced = "bd";
+        for _ in 0..300 {
+            let w = g.word();
+            let chars: Vec<char> = w.chars().collect();
+            for pair in chars.windows(2) {
+                let clash = (voiced.contains(pair[0]) && voiceless.contains(pair[1]))
+                    || (voiceless.contains(pair[0]) && voiced.contains(pair[1]));
+                assert!(!clash, "voicing clash in {w}");
+            }
         }
     }
 
