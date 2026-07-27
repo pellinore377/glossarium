@@ -371,6 +371,7 @@ fn language_tabs(language: &Language, lexeme_count: i64, change_count: i64) -> M
             }
             span.soon { "Grammar · soon" }
             span.soon { "Stories · soon" }
+            a href={ "/languages/" (language.id) "/settings" } { "Settings" }
         }
     }
 }
@@ -458,10 +459,59 @@ fn phoneme_charts(phonology: &Phonology) -> Markup {
         }
         @if !phonology.diphthongs.is_empty() {
             p.eyebrow { "Diphthongs (" (phonology.diphthongs.len()) ")" }
-            p.ph {
-                @for (i, d) in phonology.diphthongs.iter().enumerate() {
-                    @if i > 0 { "  " }
-                    "/" (d) "/"
+            (diphthong_grid(&phonology.diphthongs))
+        }
+    }
+}
+
+/// Read-only nucleus × offglide grid, rows and columns limited to vowels
+/// that actually participate in some diphthong.
+fn diphthong_grid(diphthongs: &[String]) -> Markup {
+    let mut nuclei: Vec<String> = Vec::new();
+    let mut glides: Vec<String> = Vec::new();
+    for d in diphthongs {
+        let mut ch = d.chars();
+        if let Some(n) = ch.next() {
+            let n = n.to_string();
+            if !nuclei.contains(&n) {
+                nuclei.push(n);
+            }
+        }
+        if let Some(g) = ch.next() {
+            let g = g.to_string();
+            if !glides.contains(&g) {
+                glides.push(g);
+            }
+        }
+    }
+    nuclei.sort_by_key(|v| ipa_chart::vowel_order(v));
+    glides.sort_by_key(|v| ipa_chart::vowel_order(v));
+    let has = |n: &str, g: &str| diphthongs.iter().any(|d| d == &format!("{n}{g}"));
+
+    html! {
+        div.chart-scroll {
+            table.ipa {
+                thead {
+                    tr {
+                        th { span.muted { "nucleus ↓ glide →" } }
+                        @for g in &glides { th { (g) } }
+                    }
+                }
+                tbody {
+                    @for n in &nuclei {
+                        tr {
+                            th.manner { (n) }
+                            @for g in &glides {
+                                @if n == g {
+                                    td.x {}
+                                } @else if has(n, g) {
+                                    td { span.symro { (n) (g) } }
+                                } @else {
+                                    td {}
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -499,9 +549,14 @@ pub fn language_page(
                 @if wizard_done {
                     h2 { "Sound system" }
                     (phoneme_charts(phonology))
-                    p.muted style="font-size:.9rem" {
-                        a href={ "/languages/" (language.id) "/phonology" } {
-                            "Edit the phonology →"
+                    // Once the lexicon exists, its forms are built on this
+                    // sound system — reopening the wizard would desync
+                    // them, so the door quietly closes.
+                    @if lexeme_count == 0 {
+                        p.muted style="font-size:.9rem" {
+                            a href={ "/languages/" (language.id) "/phonology" } {
+                                "Edit the phonology →"
+                            }
                         }
                     }
                 } @else {
@@ -526,12 +581,31 @@ pub fn language_page(
                 input type="text" name="name" placeholder="Daughter language name" required;
                 button type="submit" { "Evolve a daughter →" }
             }
+        },
+    )
+}
 
+pub fn language_settings_page(user: &User, language: &Language) -> Markup {
+    layout(
+        "Settings",
+        Some(user),
+        html! {
+            p.eyebrow {
+                a href={ "/languages/" (language.id) } class="muted" { "← " (language.name) }
+            }
+            h1 { (language.name) ": settings" }
+            h2 { "Rename" }
+            form.inline method="post" action={ "/languages/" (language.id) "/rename" } {
+                input type="text" name="name" value=(language.name) required;
+                button.quiet type="submit" { "Rename" }
+            }
             div.settings {
-                p.eyebrow { "Settings" }
-                form.inline method="post" action={ "/languages/" (language.id) "/rename" } {
-                    input type="text" name="name" value=(language.name) required;
-                    button.quiet type="submit" { "Rename" }
+                p.eyebrow { "Danger" }
+                p.muted style="font-size:.9rem" {
+                    "Deleting a language deletes every daughter descended "
+                    "from it, along with their sound changes"
+                    @if language.parent_id.is_none() { " — and, for a proto-language, the family's entire lexicon" }
+                    ". There is no undo."
                 }
                 form.inline.danger method="post"
                     action={ "/languages/" (language.id) "/delete" }

@@ -189,6 +189,21 @@ pub async fn show_language(
     .into_response())
 }
 
+/// GET /languages/{id}/settings
+pub async fn language_settings(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+) -> Result<Response, AppError> {
+    let user = match require_user(&state, &session).await? {
+        Ok(u) => u,
+        Err(landing) => return Ok(landing),
+    };
+    let (language, _) =
+        crate::phonology::owned_language_with_phonology(&state, &user, id).await?;
+    Ok(views::language_settings_page(&user, &language).into_response())
+}
+
 #[derive(Deserialize)]
 pub struct RenameLanguage {
     name: String,

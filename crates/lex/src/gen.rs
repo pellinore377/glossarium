@@ -124,7 +124,36 @@ pub struct WordSpec {
     pub onset_max: u8,
     pub coda_min: u8,
     pub coda_max: u8,
+    /// Explicitly allowed two-consonant sequences ("pr", "st") for onsets
+    /// and codas. `None` = fall back to the sonority heuristic; `Some`
+    /// (even empty) = the user has curated the list, obey it exactly.
+    pub onset_pairs: Option<Vec<String>>,
+    pub coda_pairs: Option<Vec<String>>,
     pub seed: u64,
+}
+
+/// The sonority-derived default cluster list the wizard starts from:
+/// rising toward the nucleus for onsets (with the sibilant+stop
+/// exception), falling for codas. Pairs, not triples — longer clusters
+/// are chains of allowed pairs.
+pub fn default_pairs(consonants: &[String], rising: bool) -> Vec<String> {
+    let mut out = Vec::new();
+    for a in consonants {
+        for b in consonants {
+            if a == b {
+                continue;
+            }
+            let ok = if rising {
+                sonority(b) > sonority(a) || (is_sibilant(a) && sonority(b) == 1)
+            } else {
+                sonority(b) < sonority(a)
+            };
+            if ok {
+                out.push(format!("{a}{b}"));
+            }
+        }
+    }
+    out
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,6 +187,8 @@ pub struct Generator {
     onset_max: u8,
     coda_min: u8,
     coda_max: u8,
+    onset_pairs: Option<HashSet<String>>,
+    coda_pairs: Option<HashSet<String>>,
     rng: Rng,
     used: HashSet<String>,
 }
@@ -202,9 +233,25 @@ impl Generator {
             onset_max: spec.onset_max,
             coda_min: spec.coda_min,
             coda_max: spec.coda_max,
+            onset_pairs: spec.onset_pairs.map(|v| v.into_iter().collect()),
+            coda_pairs: spec.coda_pairs.map(|v| v.into_iter().collect()),
             rng: Rng(spec.seed),
             used: HashSet::new(),
         })
+    }
+
+    /// Is `prev` + `next` a legal cluster sequence? A curated pair list
+    /// wins outright; otherwise the sonority heuristic decides.
+    fn pair_ok(&self, prev: &str, next: &str, rising: bool) -> bool {
+        let explicit = if rising { &self.onset_pairs } else { &self.coda_pairs };
+        if let Some(set) = explicit {
+            return set.contains(&format!("{prev}{next}"));
+        }
+        if rising {
+            sonority(next) > sonority(prev) || (is_sibilant(prev) && sonority(next) == 1)
+        } else {
+            sonority(next) < sonority(prev)
+        }
     }
 
     fn margin_len(&mut self, min: u8, max: u8, weights: &[u32; 4]) -> usize {
@@ -220,10 +267,10 @@ impl Generator {
         *self.rng.pick_weighted(&choices)
     }
 
-    /// One consonant obeying the cluster constraint against `prev`:
-    /// onsets rise in sonority (sibilant + stop excepted, so /st- sp-/
-    /// survive), codas fall. A few rejected samples and we give up and
-    /// end the cluster early — a shorter cluster is always legal.
+    /// One consonant obeying the cluster constraint against `prev`
+    /// (curated pair list, or sonority when none). A few rejected
+    /// samples and we give up and end the cluster early — a shorter
+    /// cluster is always legal.
     fn cluster_next(&mut self, prev: Option<&str>, rising: bool) -> Option<String> {
         for _ in 0..12 {
             let c = self.rng.pick_weighted(&self.consonants).clone();
@@ -233,12 +280,7 @@ impl Generator {
                     if p == c {
                         continue; // no geminates inside a cluster
                     }
-                    let ok = if rising {
-                        sonority(&c) > sonority(p) || (is_sibilant(p) && sonority(&c) == 1)
-                    } else {
-                        sonority(&c) < sonority(p)
-                    };
-                    if ok {
+                    if self.pair_ok(p, &c, rising) {
                         return Some(c);
                     }
                 }
@@ -338,7 +380,41 @@ mod tests {
             onset_max: 2,
             coda_min: 0,
             coda_max: 1,
+            onset_pairs: None,
+            coda_pairs: None,
             seed,
+        }
+    }
+
+    #[test]
+    fn default_pairs_follow_sonority() {
+        let cons = s(&["p", "s", "r", "l"]);
+        let rising = default_pairs(&cons, true);
+        assert!(rising.contains(&"pr".to_string()), "stop+liquid onset");
+        assert!(rising.contains(&"sp".to_string()), "sibilant+stop exception");
+        assert!(!rising.contains(&"rp".to_string()), "falling onset rejected");
+        let falling = default_pairs(&cons, false);
+        assert!(falling.contains(&"rp".to_string()), "liquid+stop coda");
+        assert!(!falling.contains(&"pr".to_string()), "rising coda rejected");
+    }
+
+    #[test]
+    fn curated_pairs_are_obeyed() {
+        let mut sp = spec(21);
+        sp.onset_pairs = Some(vec!["pr".to_string()]);
+        let mut g = Generator::new(sp).unwrap();
+        let consonants = "ptkmnslrj";
+        for _ in 0..200 {
+            let w = g.word();
+            let chars: Vec<char> = w.chars().collect();
+            // Any consonant pair at the very start of a word is an onset
+            // cluster and must be the one allowed pair.
+            if chars.len() >= 2
+                && consonants.contains(chars[0])
+                && consonants.contains(chars[1])
+            {
+                assert_eq!(&w[..2], "pr", "illegal onset cluster in {w}");
+            }
         }
     }
 

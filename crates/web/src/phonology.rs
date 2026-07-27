@@ -40,6 +40,12 @@ pub struct Phonology {
     pub diphthongs: Vec<String>,
     #[serde(default)]
     pub syllable: Option<SyllableStructure>,
+    /// Allowed two-consonant sequences in onsets/codas ("pr", "st").
+    /// None = sonority defaults not yet materialized by the wizard.
+    #[serde(default)]
+    pub onset_clusters: Option<Vec<String>>,
+    #[serde(default)]
+    pub coda_clusters: Option<Vec<String>>,
     #[serde(default)]
     pub stress: Option<String>,
     #[serde(default)]
@@ -97,6 +103,7 @@ fn wizard_steps(current: &str) -> Markup {
         "vowels",
         "diphthongs",
         "phonotactics",
+        "clusters",
         "stress",
         "romanization",
         "summary",
@@ -661,8 +668,8 @@ pub async fn phonotactics_page(
             (margin_select("coda_max", "Coda max", syl.coda_max))
         }
         (tactics_fragment(&syl, phonology.consonants.len()))
-        form.inline method="get" action={ "/languages/" (language.id) "/phonology/stress" } {
-            button type="submit" { "Continue to stress →" }
+        form.inline method="get" action={ "/languages/" (language.id) "/phonology/clusters" } {
+            button type="submit" { "Continue to clusters →" }
         }
     };
     Ok(views::layout("Phonotactics", Some(&user), body).into_response())
@@ -722,6 +729,196 @@ pub async fn set_phonotactics(
     Ok(tactics_fragment(&syl, phonology.consonants.len()).into_response())
 }
 
+// ---------- Consonant clusters ----------
+
+fn cluster_info_fragment(kind: &str, allowed: usize, possible: usize) -> Markup {
+    html! {
+        p.eyebrow id={ "cinfo-" (kind) } {
+            (allowed) " of " (possible) " possible " (kind) " pairs allowed"
+        }
+    }
+}
+
+fn cluster_grid(
+    language_id: i64,
+    kind: &str,
+    consonants: &[String],
+    allowed: &[String],
+) -> Markup {
+    let is_on = |pair: &str| allowed.iter().any(|x| x == pair);
+    html! {
+        div.chart-scroll {
+            table.ipa {
+                thead {
+                    tr {
+                        th { span.muted { "first ↓ second →" } }
+                        @for c in consonants { th { (c) } }
+                    }
+                }
+                tbody {
+                    @for a in consonants {
+                        tr {
+                            th.manner { (a) }
+                            @for b in consonants {
+                                @if a == b {
+                                    td.x {}
+                                } @else {
+                                    @let pair = format!("{a}{b}");
+                                    td {
+                                        button.sym.on[is_on(&pair)]
+                                            type="button"
+                                            onclick="this.classList.toggle('on')"
+                                            hx-post={ "/languages/" (language_id) "/phonology/clusters/toggle" }
+                                            hx-vals=(format!(r#"{{"kind":"{kind}","pair":"{pair}"}}"#))
+                                            hx-target={ "#cinfo-" (kind) }
+                                            hx-swap="outerHTML"
+                                        { (pair) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        (cluster_info_fragment(kind, allowed.len(), consonants.len() * (consonants.len() - 1)))
+    }
+}
+
+/// GET /languages/{id}/phonology/clusters
+///
+/// Only meaningful when the syllable template allows clusters at all;
+/// defaults are materialized from the sonority heuristic on first visit,
+/// so the grids start sensible rather than empty.
+pub async fn clusters_page(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+) -> Result<Response, AppError> {
+    let user = match require_user(&state, &session).await? {
+        Ok(u) => u,
+        Err(landing) => return Ok(landing),
+    };
+    let (language, mut phonology) = owned_language_with_phonology(&state, &user, id).await?;
+    let syl = phonology.syllable.unwrap_or_default();
+
+    let mut consonants = phonology.consonants.clone();
+    consonants.sort_by_key(|s| ipa_chart::consonant_order(s));
+
+    let onset_possible = syl.onset_max >= 2 && consonants.len() >= 2;
+    let coda_possible = syl.coda_max >= 2 && consonants.len() >= 2;
+
+    let mut changed = false;
+    if onset_possible && phonology.onset_clusters.is_none() {
+        phonology.onset_clusters = Some(lex::gen::default_pairs(&consonants, true));
+        changed = true;
+    }
+    if coda_possible && phonology.coda_clusters.is_none() {
+        phonology.coda_clusters = Some(lex::gen::default_pairs(&consonants, false));
+        changed = true;
+    }
+    if changed {
+        save_phonology(&state, language.id, &phonology).await?;
+    }
+
+    let body = html! {
+        p.eyebrow {
+            a href={ "/languages/" (language.id) "/phonology/phonotactics" } class="muted" { "← Syllable structure" }
+        }
+        (wizard_steps("clusters"))
+        h1 { "Consonant clusters" }
+        @if !onset_possible && !coda_possible {
+            div.empty {
+                "Your syllable template ("
+                (syl.template())
+                ") never puts two consonants side by side, so there are "
+                "no clusters to curate. Carry on."
+            }
+        } @else {
+            p {
+                "Which consonants may actually sit next to each other? "
+                "The grids start from the sonority defaults — clusters "
+                "that rise toward the vowel in onsets (/pr/, /st/) and "
+                "fall away from it in codas (/rp/) — but every language "
+                "has opinions. English allows /sf/ in \"sphere\" and bans "
+                "/ps/ at word start; Greek disagrees on both. Click to "
+                "toggle."
+            }
+            @if onset_possible {
+                h2 { "Onset clusters" }
+                (cluster_grid(language.id, "onset", &consonants,
+                    phonology.onset_clusters.as_deref().unwrap_or(&[])))
+            }
+            @if coda_possible {
+                h2 { "Coda clusters" }
+                (cluster_grid(language.id, "coda", &consonants,
+                    phonology.coda_clusters.as_deref().unwrap_or(&[])))
+            }
+            p.muted style="font-size:.9rem" {
+                "Three-consonant clusters are chains of allowed pairs: "
+                "/spr/ works when /sp/ and /pr/ both do."
+            }
+        }
+        form.inline method="get" action={ "/languages/" (language.id) "/phonology/stress" } {
+            button type="submit" { "Continue to stress →" }
+        }
+    };
+    Ok(views::layout("Clusters", Some(&user), body).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct ToggleCluster {
+    kind: String,
+    pair: String,
+}
+
+/// POST /languages/{id}/phonology/clusters/toggle (HTMX)
+pub async fn toggle_cluster(
+    State(state): State<AppState>,
+    session: Session,
+    Path(id): Path<i64>,
+    Form(form): Form<ToggleCluster>,
+) -> Result<Response, AppError> {
+    let user = match require_user(&state, &session).await? {
+        Ok(u) => u,
+        Err(landing) => return Ok(landing),
+    };
+    let (language, mut phonology) = owned_language_with_phonology(&state, &user, id).await?;
+
+    let chars: Vec<String> = form.pair.chars().map(|c| c.to_string()).collect();
+    let valid = chars.len() == 2
+        && chars[0] != chars[1]
+        && chars
+            .iter()
+            .all(|c| phonology.consonants.iter().any(|x| x == c));
+    let n = phonology.consonants.len();
+
+    if valid && matches!(form.kind.as_str(), "onset" | "coda") {
+        let list = if form.kind == "onset" {
+            phonology.onset_clusters.get_or_insert_with(Vec::new)
+        } else {
+            phonology.coda_clusters.get_or_insert_with(Vec::new)
+        };
+        match list.iter().position(|p| *p == form.pair) {
+            Some(i) => {
+                list.remove(i);
+            }
+            None => list.push(form.pair.clone()),
+        }
+        let allowed = list.len();
+        save_phonology(&state, language.id, &phonology).await?;
+        return Ok(
+            cluster_info_fragment(&form.kind, allowed, n * n.saturating_sub(1)).into_response(),
+        );
+    }
+
+    let allowed = match form.kind.as_str() {
+        "onset" => phonology.onset_clusters.as_ref().map_or(0, |v| v.len()),
+        _ => phonology.coda_clusters.as_ref().map_or(0, |v| v.len()),
+    };
+    Ok(cluster_info_fragment(&form.kind, allowed, n * n.saturating_sub(1)).into_response())
+}
+
 // ---------- Stress ----------
 
 /// GET /languages/{id}/phonology/stress
@@ -738,7 +935,7 @@ pub async fn stress_page(
 
     let body = html! {
         p.eyebrow {
-            a href={ "/languages/" (language.id) "/phonology/phonotactics" } class="muted" { "← Syllable structure" }
+            a href={ "/languages/" (language.id) "/phonology/clusters" } class="muted" { "← Clusters" }
         }
         (wizard_steps("stress"))
         h1 { "Stress" }
@@ -967,6 +1164,7 @@ pub async fn summary_page(
         Err(landing) => return Ok(landing),
     };
     let (language, phonology) = owned_language_with_phonology(&state, &user, id).await?;
+    let lexemes = crate::lexicon::lexeme_count(&state, language.id).await?;
     let syl = phonology.syllable.unwrap_or_default();
     let stress = phonology
         .stress
@@ -1051,12 +1249,26 @@ pub async fn summary_page(
             }
         }
 
-        form.inline method="get" action={ "/languages/" (language.id) } {
-            button type="submit" { "Finish — back to " (language.name) " →" }
-        }
-        p.muted style="font-size:.9rem" {
-            "Everything stays editable: any wizard step can be revisited "
-            "without losing the others."
+        @if language.parent_id.is_none() && lexemes == 0 {
+            h2 { "Seed the lexicon" }
+            p {
+                "The last step: " (language.name) " gets its first words. "
+                "Two hundred proto-roots — the Leipzig–Jakarta core "
+                "vocabulary plus a hundred everyday concepts — generated "
+                "from exactly the sound system above."
+            }
+            form.inline method="post" action={ "/languages/" (language.id) "/lexicon/seed" } {
+                button type="submit" { "Seed the lexicon →" }
+            }
+            p.muted style="font-size:.9rem" {
+                a href={ "/languages/" (language.id) } { "Skip for now" }
+                " — you can seed later from the Lexicon tab. Any wizard "
+                "step can be revisited until then."
+            }
+        } @else {
+            form.inline method="get" action={ "/languages/" (language.id) } {
+                button type="submit" { "Finish — back to " (language.name) " →" }
+            }
         }
     };
     Ok(views::layout("Summary", Some(&user), body).into_response())

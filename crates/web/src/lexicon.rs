@@ -52,11 +52,13 @@ fn word_spec(phonology: &Phonology, language_id: i64) -> WordSpec {
         onset_max: syl.onset_max,
         coda_min: syl.coda_min,
         coda_max: syl.coda_max,
+        onset_pairs: phonology.onset_clusters.clone(),
+        coda_pairs: phonology.coda_clusters.clone(),
         seed: lexicon_seed(language_id),
     }
 }
 
-async fn lexeme_count(state: &AppState, language_id: i64) -> Result<i64, AppError> {
+pub(crate) async fn lexeme_count(state: &AppState, language_id: i64) -> Result<i64, AppError> {
     let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM lexemes WHERE language_id = ?")
         .bind(language_id)
         .fetch_one(&state.db)
