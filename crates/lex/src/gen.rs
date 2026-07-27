@@ -138,7 +138,58 @@ pub struct WordSpec {
     /// "sp"). `None` = the default heuristic: anything except geminates
     /// and voicing-mismatched obstruent pairs (no more "lidtep").
     pub medial_pairs: Option<Vec<String>>,
+    /// Allowed three-consonant windows ("str") in onsets/codas. Clusters
+    /// of any length must satisfy every adjacent pair AND every
+    /// three-consonant window, so these govern length 3, 4, and 5.
+    /// `None` = any chain of allowed pairs.
+    pub onset_triples: Option<Vec<String>>,
+    pub coda_triples: Option<Vec<String>>,
     pub seed: u64,
+}
+
+/// Split a concatenated cluster string back into inventory symbols
+/// (multi-codepoint symbols like tʃ make this non-trivial).
+pub fn split_cluster(s: &str, symbols: &[String]) -> Option<Vec<String>> {
+    if s.is_empty() {
+        return Some(vec![]);
+    }
+    // Longest match first so tʃ beats t.
+    let mut sorted: Vec<&String> = symbols.iter().collect();
+    sorted.sort_by_key(|x| std::cmp::Reverse(x.chars().count()));
+    for sym in sorted {
+        if let Some(rest) = s.strip_prefix(sym.as_str()) {
+            if let Some(mut tail) = split_cluster(rest, symbols) {
+                tail.insert(0, sym.clone());
+                return Some(tail);
+            }
+        }
+    }
+    None
+}
+
+/// All three-consonant chains buildable from the allowed pairs — the
+/// candidate list the wizard offers for length-3+ cluster curation.
+pub fn chain_triples(pairs: &[String], symbols: &[String]) -> Vec<String> {
+    let split: Vec<(String, String)> = pairs
+        .iter()
+        .filter_map(|p| {
+            split_cluster(p, symbols).and_then(|v| {
+                (v.len() == 2).then(|| (v[0].clone(), v[1].clone()))
+            })
+        })
+        .collect();
+    let mut out = Vec::new();
+    for (a, b) in &split {
+        for (b2, c) in &split {
+            if b == b2 && a != c {
+                let t = format!("{a}{b}{c}");
+                if !out.contains(&t) {
+                    out.push(t);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Do two segments clash in obstruent voicing (like /d/+/t/)? Checked
@@ -228,15 +279,18 @@ pub struct Generator {
     onset_pairs: Option<HashSet<String>>,
     coda_pairs: Option<HashSet<String>>,
     medial_pairs: Option<HashSet<String>>,
+    onset_triples: Option<HashSet<String>>,
+    coda_triples: Option<HashSet<String>>,
     rng: Rng,
     used: HashSet<String>,
 }
 
 /// Preference for margin length within the allowed range. Onsets like to
 /// exist (most syllables on Earth start with a consonant); codas like to
-/// not. Index = cluster length.
-const ONSET_LEN_WEIGHTS: [u32; 4] = [3, 10, 3, 1];
-const CODA_LEN_WEIGHTS: [u32; 4] = [10, 5, 2, 1];
+/// not. Index = cluster length; 4- and 5-consonant monsters stay rare
+/// even when the template allows them.
+const ONSET_LEN_WEIGHTS: [u32; 6] = [3, 10, 3, 1, 1, 1];
+const CODA_LEN_WEIGHTS: [u32; 6] = [10, 5, 2, 1, 1, 1];
 
 /// Root length in syllables: disyllables dominate, monosyllables are
 /// common, trisyllables spice.
@@ -289,9 +343,19 @@ impl Generator {
             onset_pairs: spec.onset_pairs.map(|v| v.into_iter().collect()),
             coda_pairs: spec.coda_pairs.map(|v| v.into_iter().collect()),
             medial_pairs: spec.medial_pairs.map(|v| v.into_iter().collect()),
+            onset_triples: spec.onset_triples.map(|v| v.into_iter().collect()),
+            coda_triples: spec.coda_triples.map(|v| v.into_iter().collect()),
             rng: Rng(spec.seed),
             used: HashSet::new(),
         })
+    }
+
+    fn window_ok(&self, a: &str, b: &str, c: &str, rising: bool) -> bool {
+        let triples = if rising { &self.onset_triples } else { &self.coda_triples };
+        match triples {
+            Some(set) => set.contains(&format!("{a}{b}{c}")),
+            None => true,
+        }
     }
 
     fn is_consonant(&self, s: &str) -> bool {
@@ -322,7 +386,7 @@ impl Generator {
         sonority_ok && !obstruent_voicing_clash(prev, next)
     }
 
-    fn margin_len(&mut self, min: u8, max: u8, weights: &[u32; 4], rising: bool) -> usize {
+    fn margin_len(&mut self, min: u8, max: u8, weights: &[u32; 6], rising: bool) -> usize {
         let pool_empty = if rising {
             self.onset_pool.is_empty()
         } else {
@@ -331,7 +395,7 @@ impl Generator {
         if pool_empty {
             return 0;
         }
-        let choices: Vec<(usize, u32)> = (min..=max.min(3))
+        let choices: Vec<(usize, u32)> = (min..=max.min(5))
             .map(|l| (l as usize, weights[l as usize]))
             .collect();
         if choices.is_empty() {
@@ -369,9 +433,24 @@ impl Generator {
     fn cluster(&mut self, len: usize, rising: bool) -> Vec<String> {
         let mut out: Vec<String> = Vec::with_capacity(len);
         for _ in 0..len {
-            match self.cluster_next(out.last().map(String::as_str), rising) {
-                Some(c) => out.push(c),
-                None => break,
+            let mut placed = false;
+            for _ in 0..12 {
+                match self.cluster_next(out.last().map(String::as_str), rising) {
+                    Some(c) => {
+                        // Every three-consonant window must be allowed.
+                        let n = out.len();
+                        if n >= 2 && !self.window_ok(&out[n - 2], &out[n - 1], &c, rising) {
+                            continue;
+                        }
+                        out.push(c);
+                        placed = true;
+                        break;
+                    }
+                    None => break,
+                }
+            }
+            if !placed {
+                break;
             }
         }
         out
@@ -491,8 +570,37 @@ mod tests {
             onset_singles: None,
             coda_singles: None,
             medial_pairs: None,
+            onset_triples: None,
+            coda_triples: None,
             seed,
         }
+    }
+
+    #[test]
+    fn triples_govern_long_clusters() {
+        let mut sp = spec(51);
+        sp.onset_max = 3;
+        sp.onset_pairs = Some(s(&["st", "tr", "sl"]));
+        sp.onset_triples = Some(s(&["str"]));
+        let mut g = Generator::new(sp).unwrap();
+        let consonants = "ptkmnslrj";
+        for _ in 0..300 {
+            let w = g.word();
+            let chars: Vec<char> = w.chars().collect();
+            let onset_len = chars.iter().take_while(|c| consonants.contains(**c)).count();
+            if onset_len == 3 {
+                assert_eq!(&w[..3], "str", "unexpected long onset in {w}");
+            }
+        }
+    }
+
+    #[test]
+    fn chain_triples_finds_str() {
+        let pairs = s(&["st", "tr", "pl"]);
+        let syms = s(&["s", "t", "r", "p", "l"]);
+        let triples = chain_triples(&pairs, &syms);
+        assert!(triples.contains(&"str".to_string()));
+        assert!(!triples.contains(&"spl".to_string()), "sp not an allowed pair");
     }
 
     #[test]

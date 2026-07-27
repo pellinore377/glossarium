@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const MAX_MARGIN: u8 = 3;
+pub const MAX_MARGIN: u8 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyllableStructure {

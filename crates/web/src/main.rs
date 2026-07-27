@@ -91,8 +91,8 @@ async fn main() -> Result<()> {
         .route("/languages/{id}/tab/stories", get(grammar::tab_stories))
         .route("/languages/{id}/grammar", get(grammar::wizard_entry))
         .route(
-            "/languages/{id}/grammar/clauses",
-            get(grammar::clauses_page).post(grammar::save_clauses),
+            "/languages/{id}/grammar/profile",
+            get(grammar::profile_page).post(grammar::save_profile),
         )
         .route(
             "/languages/{id}/grammar/nouns",

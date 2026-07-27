@@ -206,6 +206,8 @@ pub(crate) async fn derived_display_phonology(
         onset_singles: None,
         coda_singles: None,
         medial_clusters: None,
+        onset_triples: None,
+        coda_triples: None,
         stress: proto_phonology.stress.clone(),
         romanization,
     })

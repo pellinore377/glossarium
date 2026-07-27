@@ -56,6 +56,12 @@ pub struct Phonology {
     /// None = default heuristic (no geminates, no voicing clashes).
     #[serde(default)]
     pub medial_clusters: Option<Vec<String>>,
+    /// Allowed three-consonant windows for clusters of length 3+.
+    /// None = any chain of allowed pairs.
+    #[serde(default)]
+    pub onset_triples: Option<Vec<String>>,
+    #[serde(default)]
+    pub coda_triples: Option<Vec<String>>,
     #[serde(default)]
     pub stress: Option<String>,
     #[serde(default)]
@@ -832,6 +838,39 @@ fn pair_grid(
     }
 }
 
+/// Chip list for three-consonant windows: every triple chainable from
+/// the allowed pairs, toggleable.
+fn triples_row(
+    language_id: i64,
+    kind: &str,
+    candidates: &[String],
+    allowed: &[String],
+) -> Markup {
+    let is_on = |t: &str| allowed.iter().any(|x| x == t);
+    html! {
+        @if candidates.is_empty() {
+            p.muted style="font-size:.9rem" {
+                "No three-consonant chains are possible with the current "
+                "pair grid — allow more pairs above and revisit."
+            }
+        } @else {
+            div.singlesrow {
+                @for t in candidates {
+                    button.sym.on[is_on(t)]
+                        type="button"
+                        onclick="this.classList.toggle('on')"
+                        hx-post={ "/languages/" (language_id) "/phonology/clusters/toggle" }
+                        hx-vals=(format!(r#"{{"kind":"{kind}","pair":"{t}"}}"#))
+                        hx-target={ "#cinfo-" (kind) }
+                        hx-swap="outerHTML"
+                    { (t) }
+                }
+            }
+            (cluster_info_fragment(kind, allowed.len(), candidates.len()))
+        }
+    }
+}
+
 /// A row of toggle buttons: which consonants may occupy this position.
 fn singles_row(
     language_id: i64,
@@ -908,6 +947,18 @@ pub async fn clusters_page(
         phonology.coda_clusters = Some(lex::gen::default_pairs(&consonants, false));
         changed = true;
     }
+    let onset_triples_used = syl.onset_max >= 3 && consonants.len() >= 3;
+    let coda_triples_used = syl.coda_max >= 3 && consonants.len() >= 3;
+    if onset_triples_used && phonology.onset_triples.is_none() {
+        let pairs = phonology.onset_clusters.as_deref().unwrap_or(&[]);
+        phonology.onset_triples = Some(lex::gen::chain_triples(pairs, &consonants));
+        changed = true;
+    }
+    if coda_triples_used && phonology.coda_triples.is_none() {
+        let pairs = phonology.coda_clusters.as_deref().unwrap_or(&[]);
+        phonology.coda_triples = Some(lex::gen::chain_triples(pairs, &consonants));
+        changed = true;
+    }
     // Medial junctions arise whenever codas and onsets both exist.
     let medial_used = onsets_used && codas_used;
     if medial_used && phonology.medial_clusters.is_none() {
@@ -977,11 +1028,25 @@ pub async fn clusters_page(
                 (cluster_grid(language.id, "coda", &consonants,
                     phonology.coda_clusters.as_deref().unwrap_or(&[])))
             }
-            @if onset_pairs_used || coda_pairs_used {
+            @if onset_triples_used {
+                h2 { "Onset clusters of three" }
                 p.muted style="font-size:.9rem" {
-                    "Three-consonant clusters are chains of allowed pairs: "
-                    "/spr/ works when /sp/ and /pr/ both do."
+                    "Every chain your pair grid allows, individually "
+                    "toggleable — keep /str/, kill /mgl/. Four- and "
+                    "five-consonant clusters must pass through these "
+                    "windows too."
                 }
+                (triples_row(language.id, "onset3",
+                    &lex::gen::chain_triples(
+                        phonology.onset_clusters.as_deref().unwrap_or(&[]), &consonants),
+                    phonology.onset_triples.as_deref().unwrap_or(&[])))
+            }
+            @if coda_triples_used {
+                h2 { "Coda clusters of three" }
+                (triples_row(language.id, "coda3",
+                    &lex::gen::chain_triples(
+                        phonology.coda_clusters.as_deref().unwrap_or(&[]), &consonants),
+                    phonology.coda_triples.as_deref().unwrap_or(&[])))
             }
             @if medial_used {
                 h2 { "Across syllables" }
@@ -1064,19 +1129,24 @@ pub async fn toggle_cluster(
     };
     let (language, mut phonology) = owned_language_with_phonology(&state, &user, id).await?;
 
-    // Symbols can be multi-codepoint (tʃ), so validate by prefix-split
+    // Symbols can be multi-codepoint (tʃ), so validate by splitting
     // against the inventory rather than by counting chars.
-    let valid = phonology.consonants.iter().any(|a| {
-        form.pair
-            .strip_prefix(a.as_str())
-            .map_or(false, |rest| rest != a && phonology.consonants.iter().any(|b| b == rest))
-    });
+    let expected_len = if form.kind.ends_with('3') { 3 } else { 2 };
+    let valid = lex::gen::split_cluster(&form.pair, &phonology.consonants)
+        .map_or(false, |v| v.len() == expected_len);
     let n = phonology.consonants.len();
 
-    if valid && matches!(form.kind.as_str(), "onset" | "coda" | "medial") {
+    if valid
+        && matches!(
+            form.kind.as_str(),
+            "onset" | "coda" | "medial" | "onset3" | "coda3"
+        )
+    {
         let list = match form.kind.as_str() {
             "onset" => phonology.onset_clusters.get_or_insert_with(Vec::new),
             "coda" => phonology.coda_clusters.get_or_insert_with(Vec::new),
+            "onset3" => phonology.onset_triples.get_or_insert_with(Vec::new),
+            "coda3" => phonology.coda_triples.get_or_insert_with(Vec::new),
             _ => phonology.medial_clusters.get_or_insert_with(Vec::new),
         };
         match list.iter().position(|p| *p == form.pair) {

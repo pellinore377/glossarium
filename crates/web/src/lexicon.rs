@@ -57,6 +57,8 @@ pub(crate) fn word_spec(phonology: &Phonology, language_id: i64) -> WordSpec {
         onset_singles: phonology.onset_singles.clone(),
         coda_singles: phonology.coda_singles.clone(),
         medial_pairs: phonology.medial_clusters.clone(),
+        onset_triples: phonology.onset_triples.clone(),
+        coda_triples: phonology.coda_triples.clone(),
         seed: lexicon_seed(language_id),
     }
 }
